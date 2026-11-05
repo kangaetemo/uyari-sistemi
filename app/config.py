@@ -30,6 +30,7 @@ class Config:
     match_expiry_hours: int = 8
     live_stale_minutes: int = 45
     result_poll_seconds: int = 1800
+    websocket_enabled: bool = True
 
 
 def parse_decimal(name, value):
@@ -65,7 +66,7 @@ def load_config(*, test_telegram: bool = False, require_api: bool = True) -> Con
         prematch_max=decimal("PREMATCH_MAX", "1.35"),
         live_trigger=decimal("LIVE_TRIGGER", "2.00"),
         prematch_poll_seconds=integer("PREMATCH_POLL_SECONDS", "300"),
-        live_poll_seconds=integer("LIVE_POLL_SECONDS", "5"),
+        live_poll_seconds=integer("LIVE_POLL_SECONDS", "3"),
         status_poll_seconds=integer("STATUS_POLL_SECONDS", "600"),
         timezone=timezone,
         dry_run=dry_run,
@@ -79,6 +80,7 @@ def load_config(*, test_telegram: bool = False, require_api: bool = True) -> Con
         match_expiry_hours=integer("MATCH_EXPIRY_HOURS", "8"),
         live_stale_minutes=integer("LIVE_STALE_MINUTES", "45"),
         result_poll_seconds=integer("RESULT_POLL_SECONDS", "1800"),
+        websocket_enabled=os.getenv("WEBSOCKET_ENABLED", "true").lower() in {"1", "true", "yes"},
     )
     if require_api and not test_telegram and not config.api_key:
         raise ValueError("API_TENNIS_KEY .env içinde gerekli")

@@ -48,6 +48,7 @@ En az `API_TENNIS_KEY` gerekli. Gerçek Telegram mesajı için `DRY_RUN=false`, 
 cd /opt/uyari-sistemi
 sudo -u tennis .venv/bin/python main.py --test-telegram   # Telegram bağlantısını dener
 sudo -u tennis .venv/bin/python main.py --scan-live       # API anahtarını ve canlı veriyi dener
+sudo -u tennis .venv/bin/python main.py --test-websocket  # Canlı skor WebSocket'ini 30 sn dinler
 systemctl restart tennis-alert
 ```
 
@@ -81,4 +82,4 @@ Eski `data/tennis_alert.db` dosyası Git'e girmez. Taşımak isterseniz servis d
 
 - `.env` dosyası yalnızca `tennis` kullanıcısı tarafından okunabilir (`chmod 600`). Gizli bilgileri Git'e koymayın.
 - API paketinin süresi dolarsa logda `yetki hatası (HTTP 401/403)` görünür; anahtarı `.env` içinde yenileyip servisi yeniden başlatın.
-- `LIVE_POLL_SECONDS=5` günde yaklaşık 17.000 canlı oran çağrısı yapar. Paketinizin kotası düşükse 10–15 saniyeye çıkarın.
+- `LIVE_POLL_SECONDS=3` günde yaklaşık 29.000 canlı oran çağrısı yapar; günlük 2.000.000 sınırlı pakette sorun değildir.

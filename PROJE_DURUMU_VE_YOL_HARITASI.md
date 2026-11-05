@@ -230,6 +230,12 @@ pytest                        # Otomatik testler
 - `deploy/` altında systemd servisi, günlük yedek zamanlayıcısı ve kurulum betiği; ayrıntı `docs/SUNUCU_KURULUMU.md`.
 - Kod GitHub'a taşındı: `kangaetemo/uyari-sistemi`.
 
+## 8.2. 5 Kasım 2026: WebSocket
+
+- Paket sınırı günde 2.000.000 istek (kullanıcının aktardığı bilgi); canlı tarama 3 saniyeye indirildi.
+- Canlı skor WebSocket'i eklendi: 3. set 0–0 başlangıcı anında yakalanıyor, `get_livescore` sorgusu kalktı, bağlantı koparsa otomatik geri dönüş var.
+- WebSocket oran göndermediği için oranlar REST ile çekilmeye devam ediyor.
+
 ## 9. Çalışma kaydı
 
 | Aşama | Durum |
