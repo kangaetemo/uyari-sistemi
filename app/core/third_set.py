@@ -1,13 +1,13 @@
 """Third-set opening rule uses full-match To Win odds, never set-winner markets."""
 import logging
 import re
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+import time
+from datetime import datetime
 
 from app.core.rules import eligible
 
 log = logging.getLogger(__name__)
-PROVIDER_TIMEZONE = ZoneInfo("Europe/Istanbul")
+UPD_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def is_third_set(status):
@@ -18,7 +18,7 @@ def third_set_ended(status):
     value = status.strip().lower()
     number = re.fullmatch(r"set (\d+)", value)
     return bool((number and int(number[1]) > 3) or
-                any(word in value for word in ("finish", "ended", "cancel", "postpon", "retired", "walkover", "abandon")))
+                any(word in value for word in ("finish", "ended", "cancel", "postpon", "retired", "walkover", "walk over", "abandon")))
 
 
 def zero_score(value):
@@ -46,16 +46,53 @@ def opening_score(fixture):
     return zero_score(points)
 
 
-def fresh_update(updated, current, max_age):
+def parse_upd(value):
     try:
-        stamp = datetime.strptime(updated, "%Y-%m-%d %H:%M:%S").replace(tzinfo=PROVIDER_TIMEZONE)
+        return datetime.strptime(value, UPD_FORMAT)
     except (TypeError, ValueError):
-        return False
-    return -5 <= (current - stamp).total_seconds() <= max_age
+        return None
 
 
-async def process_third_set(config, api, repo, live, *, current=None):
-    current = current or datetime.now(timezone.utc)
+class FeedClock:
+    """Judges snapshot freshness against the provider's own clock.
+
+    API-Tennis returns `upd` in a provider timezone that does not follow the
+    requested `timezone` parameter (observed UTC+2 in September 2026 while
+    Europe/Istanbul was requested). Converting `upd` with a fixed timezone made
+    every snapshot look an hour or more old, so the third-set rule never
+    captured. Comparing `upd` values with the newest `upd` in the same payload
+    needs no timezone, and tracking when that newest value last advanced on our
+    own monotonic clock detects a stalled feed.
+    """
+
+    def __init__(self, monotonic=time.monotonic):
+        self._monotonic = monotonic
+        self.newest = None
+        self.advanced_at = None
+
+    def observe(self, live):
+        stamps = [stamp for item in live.values()
+                  for stamp in (parse_upd(item.home_updated_at), parse_upd(item.away_updated_at)) if stamp]
+        if not stamps:
+            return
+        newest = max(stamps)
+        if self.newest is None or newest > self.newest:
+            self.newest, self.advanced_at = newest, self._monotonic()
+
+    def fresh(self, updated, max_age):
+        stamp = parse_upd(updated)
+        if stamp is None or self.newest is None:
+            return False
+        if self._monotonic() - self.advanced_at > max_age:
+            return False  # The whole feed stopped moving.
+        return (self.newest - stamp).total_seconds() <= max_age
+
+
+async def process_third_set(config, api, repo, live, *, clock):
+    """Capture new third-set openings and follow open watches; returns the number of new alerts."""
+    clock.observe(live)
+    created = 0
+    max_age = config.third_set_odds_max_age_seconds
     candidates = {key:item for key,item in live.items()
                   if is_third_set(item.status) and not repo.third_set_decided(key)}
     if candidates:
@@ -68,25 +105,29 @@ async def process_third_set(config, api, repo, live, *, current=None):
             if not fixture:
                 continue
             opening = opening_score(fixture)
-            if opening is False or (opening is True and item.game_score and not zero_score(item.game_score)):
+            if opening is False:
                 repo.decide_third_set(key, fixture, "MISSED")
                 log.info("3. SET | event=%s | başlangıç kaçırıldı; takip açılmadı", key)
                 continue
             if opening is not True:
                 continue
-            valid = {}
-            for side, odd, updated in (("Home",item.home,item.home_updated_at),("Away",item.away,item.away_updated_at)):
-                if odd is not None and fresh_update(updated,current,config.third_set_odds_max_age_seconds):
-                    valid[side] = (odd,updated)
-            if not valid:
-                continue  # Suspended/stale opening odds may become valid before the first point.
-            watches = {side:values for side,values in valid.items()
-                       if eligible(values[0],config.third_set_min,config.third_set_max)}
+            if item.game_score and not zero_score(item.game_score):
+                # The two feeds disagree; the next poll settles which one lagged.
+                log.info("3. SET | event=%s | skor ve oran akışı uyuşmuyor; bekleniyor", key)
+                continue
+            sides = (("Home",item.home,item.home_updated_at),("Away",item.away,item.away_updated_at))
+            stale = [side for side,odd,updated in sides if odd is None or not clock.fresh(updated,max_age)]
+            if stale:
+                # Deciding with one side stale or suspended would drop it for good.
+                log.info("3. SET | event=%s | başlangıç oranı güncel değil (%s); bekleniyor", key, ",".join(stale))
+                continue
+            watches = {side:(odd,updated) for side,odd,updated in sides
+                       if eligible(odd,config.third_set_min,config.third_set_max)}
             repo.decide_third_set(key,fixture,"CAPTURED",watches)
             for side,(odd,_) in watches.items():
                 log.info("3. SET TAKİP | event=%s | taraf=%s | başlangıç=%s",key,side,odd)
 
-    for watch in repo.third_set_watched():
+    for watch in repo.third_set_tracked():
         item = live.get(watch["event_key"])
         if item is None:
             continue
@@ -97,8 +138,10 @@ async def process_third_set(config, api, repo, live, *, current=None):
             continue
         side = watch["favorite_side"]
         odd, updated = (item.home,item.home_updated_at) if side == "Home" else (item.away,item.away_updated_at)
-        if odd is None or not fresh_update(updated,current,config.third_set_odds_max_age_seconds):
+        if odd is None or not clock.fresh(updated,max_age):
             continue
         if repo.record_third_set_live(watch,odd,updated,config.third_set_trigger):
+            created += 1
             log.warning("3. SET ALARMI | event=%s | taraf=%s | %s -> %s",
                         watch["event_key"],side,watch["opening_odds"],odd)
+    return created

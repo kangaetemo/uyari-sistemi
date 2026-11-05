@@ -7,3 +7,5 @@ logs/*.log
 .pytest_cache/
 .pytest_tmp*/
 *.zip
+data/*.db-*
+backups/

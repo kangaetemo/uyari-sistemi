@@ -1,6 +1,6 @@
 import asyncio
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -9,11 +9,10 @@ import pytest
 
 from app.core.monitor import Monitor
 from app.core.parsers import PrematchOdds, parse_live_odds
-from app.core.third_set import opening_score, process_third_set
+from app.core.third_set import FeedClock, opening_score, process_third_set
 from app.db.repository import Repository
 from app.notifications.telegram import format_alert
 
-CURRENT = datetime(2026,10,4,17,0,0,tzinfo=timezone.utc)
 UPDATED = "2026-10-04 20:00:00"
 CONFIG = SimpleNamespace(third_set_enabled=True,third_set_min=Decimal("1.30"),
     third_set_max=Decimal("1.60"),third_set_trigger=Decimal("2.00"),
@@ -29,10 +28,14 @@ def score_fixture(points="0 - 0", games=("0","0"), status="Set 3"):
                   {"score_set":"3","score_first":games[0],"score_second":games[1]}]}
 
 
-def live_payload(home="1.40",away="3.00",status="Set 3",points="0 - 0",updated=UPDATED,suspended="No"):
+def live_payload(home="1.40",away="3.00",status="Set 3",points="0 - 0",updated=UPDATED,suspended="No",feed_updated=UPDATED):
+    """Event 77 under test plus another live event that stands for the rest of the feed's clock."""
     return {"success":1,"result":{"77":{"event_key":77,"event_status":status,"event_game_result":points,
         "live_odds":[{"odd_name":"To Win","type":side,"value":value,"upd":updated,"suspended":suspended}
-                     for side,value in (("Home",home),("Away",away))]}}}
+                     for side,value in (("Home",home),("Away",away))]},
+        "88":{"event_key":88,"event_status":"Set 1","event_game_result":"15 - 0",
+        "live_odds":[{"odd_name":"To Win","type":side,"value":"1.90","upd":feed_updated,"suspended":"No"}
+                     for side in ("Home","Away")]}}}
 
 
 class FakeAPI:
@@ -51,9 +54,24 @@ class FakeAPI:
         return self.payload
 
 
+class FakeMonotonic:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def clock_for(repo):
+    # One feed clock per database, like one Monitor per process.
+    if not hasattr(repo, "_test_clock"):
+        repo._test_clock = FeedClock(FakeMonotonic())
+    return repo._test_clock
+
+
 def process(repo,payload=None,fixture=None):
     api = FakeAPI(fixture)
-    asyncio.run(process_third_set(CONFIG,api,repo,parse_live_odds(payload or live_payload()),current=CURRENT))
+    asyncio.run(process_third_set(CONFIG,api,repo,parse_live_odds(payload or live_payload()),clock=clock_for(repo)))
     return api
 
 
@@ -181,11 +199,12 @@ def test_full_monitor_delivers_only_one_third_set_notification(tmp_path):
     api = FakeAPI()
     monitor = Monitor(CONFIG,api,repo,telegram)
     updated = datetime.now(CONFIG.timezone).strftime("%Y-%m-%d %H:%M:%S")
-    api.payload = live_payload(updated=updated)
+    api.payload = live_payload(updated=updated,feed_updated=updated)
     asyncio.run(monitor.live_scan())
-    api.payload = live_payload(home="2.10",updated=updated)
-    asyncio.run(monitor.live_scan())
-    asyncio.run(monitor.live_scan())
+    api.payload = live_payload(home="2.10",updated=updated,feed_updated=updated)
+    for _ in range(2):
+        asyncio.run(monitor.live_scan())
+        asyncio.run(monitor.deliver_alerts())
     assert len(telegram.messages) == 1 and "3. set başlangıcı" in telegram.messages[0]
     assert not repo.pending_alerts()
     assert repo.conn.execute("SELECT telegram_sent FROM alerts").fetchone()[0] == 1

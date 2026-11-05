@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -27,14 +27,31 @@ class Config:
     third_set_max: Decimal = Decimal("1.60")
     third_set_trigger: Decimal = Decimal("2.00")
     third_set_odds_max_age_seconds: int = 30
+    match_expiry_hours: int = 8
+    live_stale_minutes: int = 45
+    result_poll_seconds: int = 1800
 
 
-def load_config(*, test_telegram: bool = False) -> Config:
+def parse_decimal(name, value):
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        raise ValueError(f"{name} geçerli bir ondalık sayı olmalı (ör. 2.00), verilen: {value!r}") from None
+    if not number.is_finite():
+        raise ValueError(f"{name} sonlu bir sayı olmalı, verilen: {value!r}")
+    return number
+
+
+def load_config(*, test_telegram: bool = False, require_api: bool = True) -> Config:
     load_dotenv()
     def decimal(name, default):
-        return Decimal(os.getenv(name, default))
+        return parse_decimal(name, os.getenv(name, default))
     def integer(name, default):
-        return int(os.getenv(name, default))
+        value = os.getenv(name, default)
+        try:
+            return int(str(value).strip())
+        except ValueError:
+            raise ValueError(f"{name} tam sayı olmalı, verilen: {value!r}") from None
     dry_run = os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"}
     try:
         timezone = ZoneInfo(os.getenv("APP_TIMEZONE", "Europe/Istanbul"))
@@ -59,22 +76,31 @@ def load_config(*, test_telegram: bool = False) -> Config:
         third_set_max=decimal("THIRD_SET_MAX", "1.60"),
         third_set_trigger=decimal("THIRD_SET_TRIGGER", "2.00"),
         third_set_odds_max_age_seconds=integer("THIRD_SET_ODDS_MAX_AGE_SECONDS", "30"),
+        match_expiry_hours=integer("MATCH_EXPIRY_HOURS", "8"),
+        live_stale_minutes=integer("LIVE_STALE_MINUTES", "45"),
+        result_poll_seconds=integer("RESULT_POLL_SECONDS", "1800"),
     )
-    if not test_telegram and not config.api_key:
+    if require_api and not test_telegram and not config.api_key:
         raise ValueError("API_TENNIS_KEY .env içinde gerekli")
     if (not dry_run or test_telegram) and not (config.telegram_token and config.telegram_chat_id):
         raise ValueError("Telegram için TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID gerekli")
     if not (Decimal("1") < config.prematch_min <= config.prematch_max):
         raise ValueError("PREMATCH_MIN > 1 ve PREMATCH_MIN <= PREMATCH_MAX olmalı")
-    if config.live_trigger <= 1:
-        raise ValueError("LIVE_TRIGGER > 1 olmalı")
-    if not (config.third_set_min.is_finite() and config.third_set_max.is_finite()
-            and Decimal("1") < config.third_set_min <= config.third_set_max):
+    validate_live_trigger(config.live_trigger, config.prematch_max)
+    if not (Decimal("1") < config.third_set_min <= config.third_set_max):
         raise ValueError("THIRD_SET_MIN > 1 ve THIRD_SET_MIN <= THIRD_SET_MAX olmalı")
-    if not config.third_set_trigger.is_finite() or config.third_set_trigger <= config.third_set_max:
+    if config.third_set_trigger <= config.third_set_max:
         raise ValueError("THIRD_SET_TRIGGER > THIRD_SET_MAX olmalı")
     if config.third_set_odds_max_age_seconds < 1:
         raise ValueError("THIRD_SET_ODDS_MAX_AGE_SECONDS >= 1 olmalı")
     if config.prematch_poll_seconds < 30 or config.live_poll_seconds < 2 or config.status_poll_seconds < 30:
         raise ValueError("Polling aralıkları: prematch >=30, live >=2, status >=30 saniye")
+    if config.match_expiry_hours < 1 or config.live_stale_minutes < 5 or config.result_poll_seconds < 300:
+        raise ValueError("MATCH_EXPIRY_HOURS >= 1, LIVE_STALE_MINUTES >= 5, RESULT_POLL_SECONDS >= 300 olmalı")
     return config
+
+
+def validate_live_trigger(value, prematch_max):
+    if value <= prematch_max:
+        # Otherwise every eligible favourite would alert as soon as it goes live.
+        raise ValueError("LIVE_TRIGGER, PREMATCH_MAX değerinden büyük olmalı")

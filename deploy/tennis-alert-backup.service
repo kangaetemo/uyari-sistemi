@@ -1,0 +1,9 @@
+[Unit]
+Description=Tenis oran alarmı SQLite yedeği
+
+[Service]
+Type=oneshot
+User=tennis
+Group=tennis
+WorkingDirectory=/opt/uyari-sistemi
+ExecStart=/opt/uyari-sistemi/deploy/backup.sh

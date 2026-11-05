@@ -1,6 +1,6 @@
 # Tenis oran takip sistemi — durum ve yol haritası
 
-Son güncelleme: **4 Ekim 2026**
+Son güncelleme: **5 Kasım 2026**
 
 Bu dosya, bu görevde yapılan geliştirmeler, mevcut kaynak kod ve kullanıcının paylaştığı diğer sohbet üzerinden hazırlanmıştır. Tamamlanan uygulama özellikleri ile sonraki aşamalar aşağıda ayrı işaretlenmiştir. Yeni bir bilgisayarda veya yeni bir sohbette devam ederken önce bu dosya ve `README.md` okunmalıdır.
 
@@ -215,6 +215,21 @@ pytest                        # Otomatik testler
 
 `.env` içinde `DRY_RUN=true` API/veritabanı akışını çalıştırır, gerçek alarm mesajlarını loglar. `--test-telegram` bu ayardan bağımsız gerçek test mesajı gönderir. Kurulum ayrıntıları `README.md` içindedir.
 
+## 8.1. 5 Kasım 2026 inceleme düzeltmeleri
+
+- Üçüncü set kuralı gerçek API ile hiç tetiklenemiyordu: `upd` İstanbul saati sanılıyordu ama sağlayıcı UTC+2 (Eylül) dönüyordu, her oran ~1 saat eski görünüyordu. Güncellik artık aynı yanıttaki en yeni `upd` ile ölçülüyor.
+- Bir tarafı eski/askıda olan üçüncü set başlangıcı artık bekletiliyor; uygun taraf kalıcı olarak düşmüyor. Skor ve oran akışı uyuşmazsa da bekleniyor.
+- Maç önü favori tarafı maç başlayana kadar her taramada yeniden hesaplanıyor.
+- Akıştan düşen veya başlangıç saati çok geçmiş takipler `EXPIRED` olarak kapanıyor.
+- Maç sonuçları `match_results` tablosuna yazılıyor; `--report` kazanma oranını ve teorik getiriyi gösteriyor.
+- Alarm sonrası oran geçmişi toplanmaya devam ediyor.
+- Telegram kuyruğu: bozuk bir alarm kuyruğu kilitlemiyor, iki süreç aynı alarmı göndermiyor, gönderim taramadan ayrı.
+- API: 429'da en fazla 60 saniye tek bekleme, 401/403 tekrar denenmiyor. Durum döngüsü hatada durmuyor.
+- Ayar hataları okunur mesaj veriyor; `LIVE_TRIGGER > PREMATCH_MAX` kontrol ediliyor. "Bugün alarm" İstanbul gününe göre.
+- SQLite WAL modu ve 30 sn kilit bekleme (panel/CLI ile eşzamanlı okuma için).
+- `deploy/` altında systemd servisi, günlük yedek zamanlayıcısı ve kurulum betiği; ayrıntı `docs/SUNUCU_KURULUMU.md`.
+- Kod GitHub'a taşındı: `kangaetemo/uyari-sistemi`.
+
 ## 9. Çalışma kaydı
 
 | Aşama | Durum |
@@ -223,6 +238,7 @@ pytest                        # Otomatik testler
 | Canlı teşhis ve secret log düzeltmesi | Uygulandı; o aşamada 11 test geçti; gerçek API kontrolü yapıldı |
 | Üçüncü set başlangıcı kuralı ve alarm şeması geçişi | Uygulandı; son test koşusunda 33 test geçti |
 | Diğer sohbeti mevcut kodla karşılaştırma ve bu yol haritası | 4 Ekim 2026'da tamamlandı |
-| GitHub, sağlayıcı araştırması, sonuç/istatistik, panel ve LXC | Planlandı; uygulamaya başlanmadı |
+| İnceleme düzeltmeleri, sonuç kaydı/rapor, GitHub ve LXC kurulum dosyaları | 5 Kasım 2026'da uygulandı; 59 test geçti |
+| Sağlayıcı araştırması ve web paneli | Planlandı; uygulamaya başlanmadı |
 
 Bu belge güncellenirken tamamlanan işlerin kutuları, test sonuçları, yeni kararlar ve sıradaki adım birlikte güncellenmelidir. Sıradaki önerilen çalışma: **Git ile taşınabilirliği kurmak ve API deneme bitişi/maliyetini doğrulamak; ardından sonuç kaydı ve panelin veri temelini tamamlamak.**

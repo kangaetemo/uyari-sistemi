@@ -3,16 +3,18 @@ import logging
 from datetime import datetime, timedelta
 
 from app.core.parsers import parse_live_odds, parse_prematch_odds
+from app.core.results import parse_result
 from app.core.rules import eligible
-from app.core.third_set import process_third_set
+from app.core.third_set import FeedClock, process_third_set
 from app.notifications.telegram import format_alert
 
 log = logging.getLogger(__name__)
+RESULT_LOOKBACK_DAYS = 7
 
 
 def event_state(fixture):
     status = str(fixture.get("event_status") or "").lower()
-    if any(word in status for word in ("cancel", "postpon", "walkover", "retired", "abandon")):
+    if any(word in status for word in ("cancel", "postpon", "walkover", "walk over", "retired", "abandon")):
         return "CANCELLED"
     if "finish" in status or "ended" in status:
         return "FINISHED"
@@ -21,11 +23,31 @@ def event_state(fixture):
     return "PREMATCH"
 
 
+def favorite_side(odds, minimum, maximum):
+    """The side the prematch rule follows: an eligible side first, otherwise the lower price."""
+    if eligible(odds.home, minimum, maximum):
+        return "Home"
+    if eligible(odds.away, minimum, maximum):
+        return "Away"
+    if odds.home is not None and odds.away is not None and odds.home != odds.away:
+        return "Home" if odds.home < odds.away else "Away"
+    return None
+
+
 class Monitor:
     def __init__(self, config, api, repository, telegram):
         self.config, self.api, self.repo, self.telegram = config, api, repository, telegram
         self.started = datetime.now().astimezone()
+        self.clock = FeedClock()
         self._delivery_lock = asyncio.Lock()
+        self._alerts_ready = asyncio.Event()
+
+    def _store_result(self, key, fixture):
+        result = parse_result(fixture)
+        if result and self.repo.save_result(key, result.winner_side, result.final_result,
+                                            result.provider_status, result.outcome_type):
+            log.info("SONUÇ | event=%s | %s | kazanan=%s | %s", key, result.outcome_type,
+                     result.winner_side or "-", result.final_result or "-")
 
     async def prematch_scan(self):
         local_date = datetime.now(self.config.timezone).date()
@@ -43,23 +65,13 @@ class Monitor:
             state = event_state(fixture)
             if state in {"FINISHED", "CANCELLED"} and self.repo.get_match(key):
                 self.repo.set_status(key,state)
+                self._store_result(key,fixture)
         for key, odds in odds_map.items():
             fixture = fixture_map.get(key)
-            if not fixture:
-                continue
-            state = event_state(fixture)
-            if state in {"FINISHED","CANCELLED"}:
-                if self.repo.get_match(key):
-                    self.repo.set_status(key,state)
-                continue
-            if state == "LIVE":
+            if not fixture or event_state(fixture) != "PREMATCH":
                 continue  # Never replace the last prematch reference with in-play prices.
-            old = self.repo.get_match(key)
-            side = old["favorite_side"] if old else None
-            if not side:
-                side = "Home" if eligible(odds.home,self.config.prematch_min,self.config.prematch_max) else "Away" if eligible(odds.away,self.config.prematch_min,self.config.prematch_max) else None
-            if not side and odds.home is not None and odds.away is not None:
-                side = "Home" if odds.home < odds.away else "Away" if odds.away < odds.home else None
+            # Recomputed on every scan: the favourite can change before the match starts.
+            side = favorite_side(odds,self.config.prematch_min,self.config.prematch_max)
             if not side:
                 continue
             value = odds.home if side == "Home" else odds.away
@@ -80,6 +92,7 @@ class Monitor:
             return []
         live = parse_live_odds(payload)
         seen = []
+        alerted = False
         for key, match in watched.items():
             item = live.get(key)
             if not item:
@@ -92,13 +105,16 @@ class Monitor:
             if odd is None:
                 continue
             updated = item.home_updated_at if match["favorite_side"] == "Home" else item.away_updated_at
-            log.info("LIVE | event=%s | %s | %s",key,match["favorite_player_name"],odd)
+            log.debug("LIVE | event=%s | %s | %s",key,match["favorite_player_name"],odd)
             if self.repo.record_live(match,odd,updated,self.config.live_trigger):
+                alerted = True
                 log.warning("ALARM | %s | %s -> %s",match["favorite_player_name"],match["latest_prematch_odds"],odd)
             seen.append((key,match["favorite_player_name"],odd))
         if third_set_enabled:
-            await process_third_set(self.config,self.api,self.repo,live)
-        await self.deliver_alerts()
+            if await process_third_set(self.config,self.api,self.repo,live,clock=self.clock):
+                alerted = True
+        if alerted:
+            self._alerts_ready.set()  # Delivery runs in its own loop so Telegram never stalls polling.
         return seen
 
     async def diagnose_live(self):
@@ -151,10 +167,10 @@ class Monitor:
                 continue
             first = record.get("event_first_player") or (f"Oyuncu #{record['first_player_key']}" if record.get("first_player_key") else "?")
             second = record.get("event_second_player") or (f"Oyuncu #{record['second_player_key']}" if record.get("second_player_key") else "?")
-            log.info("%s | %s vs %s | Status: %s | To Win Home: %s | Away: %s",
+            log.info("%s | %s vs %s | Status: %s | To Win Home: %s | Away: %s | upd: %s",
                      event_key, first, second,
                      item.status or "?", item.home if item.home is not None else "yok",
-                     item.away if item.away is not None else "yok")
+                     item.away if item.away is not None else "yok", item.home_updated_at or "yok")
 
     async def scheduled_live_scan(self):
         if self.config.third_set_enabled:
@@ -165,7 +181,7 @@ class Monitor:
             return
         current = datetime.now(self.config.timezone)
         for match in watched.values():
-            if match["status"] == "LIVE":
+            if match["status"] in {"LIVE", "ALERTED"}:
                 await self.live_scan()
                 return
             try:
@@ -180,12 +196,73 @@ class Monitor:
     async def deliver_alerts(self):
         async with self._delivery_lock:
             for alert in self.repo.pending_alerts():
-                message_id = await self.telegram.send(format_alert(alert,self.config.timezone))
+                if not self.repo.claim_alert(alert["id"]):
+                    continue  # Another process is sending it.
+                try:
+                    message_id = await self.telegram.send(format_alert(alert,self.config.timezone))
+                except Exception:
+                    log.exception("Telegram alarmı hazırlanamadı/gönderilemedi: event=%s", alert["event_key"])
+                    message_id = None
                 if message_id is not None:
                     self.repo.mark_sent(alert["id"],message_id)
                     log.info("Telegram bildirimi gönderildi: event=%s",alert["event_key"])
                 else:
                     self.repo.mark_failed(alert["id"],min(30 * 2 ** alert["attempts"],900))
+
+    async def delivery_loop(self, fallback_seconds=30):
+        while True:
+            try:
+                await self.deliver_alerts()
+            except Exception:
+                log.exception("Bildirim döngüsü hatası; döngü devam edecek")
+            try:
+                await asyncio.wait_for(self._alerts_ready.wait(), timeout=fallback_seconds)
+            except asyncio.TimeoutError:
+                pass
+            self._alerts_ready.clear()
+
+    def _result_dates(self, rows):
+        days = []
+        for row in rows:
+            try:
+                days.append(datetime.fromisoformat(row["match_start_time"]).date())
+            except (TypeError, ValueError):
+                try:
+                    days.append(datetime.fromisoformat(row["created_at"]).astimezone(self.config.timezone).date())
+                except (TypeError, ValueError):
+                    continue
+        today = datetime.now(self.config.timezone).date()
+        earliest = max(min(days, default=today), today - timedelta(days=RESULT_LOOKBACK_DAYS))
+        return earliest, today
+
+    async def collect_results(self):
+        """Settle started matches so every alert ends as WON, LOST or VOID."""
+        rows = self.repo.matches_without_result(RESULT_LOOKBACK_DAYS)
+        if not rows:
+            return 0
+        start, stop = self._result_dates(rows)
+        payload = await self.api.fixtures(start.isoformat(), stop.isoformat())
+        if not payload:
+            return 0
+        fixtures = {str(f["event_key"]):f for f in payload.get("result",[]) if isinstance(f,dict) and f.get("event_key") is not None}
+        saved = 0
+        for row in rows:
+            fixture = fixtures.get(row["event_key"])
+            if not fixture or parse_result(fixture) is None:
+                continue
+            state = event_state(fixture)
+            if state in {"FINISHED", "CANCELLED"} and row["is_watched"]:
+                self.repo.set_status(row["event_key"], state)
+            self._store_result(row["event_key"], fixture)
+            saved += 1
+        return saved
+
+    async def maintenance(self):
+        expired = self.repo.expire_stale(self.config.timezone, self.config.match_expiry_hours,
+                                         self.config.live_stale_minutes)
+        if expired:
+            log.info("Süresi geçen %s takip kapatıldı: %s", len(expired), ", ".join(expired[:10]))
+        await self.collect_results()
 
     async def loop(self, operation, seconds):
         while True:
@@ -198,6 +275,10 @@ class Monitor:
     async def status_loop(self):
         while True:
             await asyncio.sleep(self.config.status_poll_seconds)
-            count = len(self.repo.watched())
-            log.info("STATUS | uptime=%s | watchlist=%s | bugün alarm=%s | API requests=%s | son başarılı=%s",
-                     datetime.now().astimezone()-self.started,count,self.repo.count_today_alerts(),dict(self.api.counts),self.api.last_success)
+            try:
+                count = len(self.repo.watched())
+                log.info("STATUS | uptime=%s | watchlist=%s | bugün alarm=%s | API requests=%s | son başarılı=%s",
+                         datetime.now().astimezone()-self.started,count,self.repo.count_today_alerts(self.config.timezone),
+                         dict(self.api.counts),self.api.last_success)
+            except Exception:
+                log.exception("Durum kaydı yazılamadı")
