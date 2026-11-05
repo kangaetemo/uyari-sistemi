@@ -1,0 +1,20 @@
+[Unit]
+Description=Tenis oran alarmı istatistik paneli
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=tennis
+Group=tennis
+WorkingDirectory=/opt/uyari-sistemi
+ExecStart=/opt/uyari-sistemi/.venv/bin/python -m app.web
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

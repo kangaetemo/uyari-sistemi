@@ -1,0 +1,14 @@
+<div class="card">
+<h3>{{ title }}</h3>
+<div class="big">{{ pct(s.win_rate) }}</div>
+<div class="note">kazanma oranı, {{ s.settled }} sonuçlanmış alarm</div>
+<div class="kv">
+<span>Alarm</span><span>{{ s.total }}</span>
+<span>Kazandı / kaybetti</span><span>{{ s.WON }} / {{ s.LOST }}</span>
+<span>Bekliyor / geçersiz</span><span>{{ s.PENDING }} / {{ s.VOID }}</span>
+<span>Ortalama alarm oranı</span><span>{{ num(s.avg_odds) }}</span>
+<span>Başabaş oranı</span><span>{{ pct(s.break_even) }}</span>
+<span>Teorik getiri</span><span class="{{ 'pos' if s.profit > 0 else 'neg' if s.profit < 0 }}">{{ signed(s.profit) }} birim ({{ pct(s.roi) }})</span>
+</div>
+{% if s.settled and s.settled < 100 %}<div class="note warn">100'den az sonuç: oran henüz güvenilir değil.</div>{% endif %}
+</div>

@@ -1,6 +1,7 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+import time
+from datetime import datetime, timedelta, timezone
 
 from app.core.parsers import parse_live_odds, parse_prematch_odds
 from app.core.results import parse_result
@@ -10,6 +11,7 @@ from app.notifications.telegram import format_alert
 
 log = logging.getLogger(__name__)
 RESULT_LOOKBACK_DAYS = 7
+HEARTBEAT_SECONDS = 30
 
 
 def event_state(fixture):
@@ -41,6 +43,7 @@ class Monitor:
         self.clock = FeedClock()
         self._delivery_lock = asyncio.Lock()
         self._alerts_ready = asyncio.Event()
+        self._last_heartbeat = None
 
     def _store_result(self, key, fixture):
         result = parse_result(fixture)
@@ -91,6 +94,7 @@ class Monitor:
         if not payload:
             return []
         live = parse_live_odds(payload)
+        self._heartbeat(len(live))
         seen = []
         alerted = False
         for key, match in watched.items():
@@ -116,6 +120,15 @@ class Monitor:
         if alerted:
             self._alerts_ready.set()  # Delivery runs in its own loop so Telegram never stalls polling.
         return seen
+
+    def _heartbeat(self, live_events):
+        """Let the panel show that the bot is alive without a write on every 5 s poll."""
+        moment = time.monotonic()
+        if self._last_heartbeat is not None and moment - self._last_heartbeat < HEARTBEAT_SECONDS:
+            return
+        self._last_heartbeat = moment
+        self.repo.set_state("last_live_scan", datetime.now(timezone.utc).isoformat())
+        self.repo.set_state("live_events", live_events)
 
     async def diagnose_live(self):
         """Read-only API/watchlist inspection, including when watchlist is empty."""
@@ -263,6 +276,7 @@ class Monitor:
         if expired:
             log.info("Süresi geçen %s takip kapatıldı: %s", len(expired), ", ".join(expired[:10]))
         await self.collect_results()
+        self.repo.set_state("last_maintenance", datetime.now(timezone.utc).isoformat())
 
     async def loop(self, operation, seconds):
         while True:

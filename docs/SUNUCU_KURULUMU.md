@@ -61,6 +61,7 @@ systemctl restart tennis-alert
 | Güncelleme | `bash /opt/uyari-sistemi/deploy/install.sh` |
 | Elle yedek | `sudo -u tennis /opt/uyari-sistemi/deploy/backup.sh` |
 | Durdurma | `systemctl stop tennis-alert` |
+| Panel durumu | `systemctl status tennis-panel` (kurulum ve erişim: [PANEL.md](PANEL.md)) |
 
 Yedekler `/opt/uyari-sistemi/backups/` altında, son 14 tanesi tutulur. Geri yüklemek için servisi durdurun, yedeği açıp `data/tennis_alert.db` üzerine koyun ve servisi başlatın:
 

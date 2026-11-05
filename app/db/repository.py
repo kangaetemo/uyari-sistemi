@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS third_set_odds_history (
  live_odds TEXT NOT NULL, provider_updated_at TEXT, observed_at TEXT NOT NULL,
  FOREIGN KEY(event_key,favorite_side) REFERENCES third_set_watches(event_key,favorite_side)
 );
+CREATE TABLE IF NOT EXISTS bot_state (
+ key TEXT PRIMARY KEY, value TEXT, updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS match_results (
  event_key TEXT PRIMARY KEY REFERENCES matches(event_key), winner_side TEXT CHECK(winner_side IN ('Home','Away')),
  final_result TEXT, provider_status TEXT, outcome_type TEXT NOT NULL, recorded_at TEXT NOT NULL
@@ -72,6 +75,7 @@ class Repository:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
         self._migrate_alerts(path)
+        self._add_missing_columns()
 
     def _migrate_alerts(self, path):
         if "rule_type" in {row["name"] for row in self.conn.execute("PRAGMA table_info(alerts)")}:
@@ -97,8 +101,20 @@ class Repository:
                 FROM alerts_legacy a JOIN matches m USING(event_key)""")
             self.conn.execute("DROP TABLE alerts_legacy")
 
+    def _add_missing_columns(self):
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(matches)")}
+        if "event_type" not in columns:
+            # e.g. "Atp Singles", "Itf Men Singles"; lets the panel split statistics by level.
+            with self.conn:
+                self.conn.execute("ALTER TABLE matches ADD COLUMN event_type TEXT")
+
     def close(self):
         self.conn.close()
+
+    def set_state(self, key, value):
+        with self.conn:
+            self.conn.execute("""INSERT INTO bot_state(key,value,updated_at) VALUES (?,?,?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at""", (key,str(value),now()))
 
     def watched(self):
         """Matches whose live odds are collected; alerted ones keep collecting until they close."""
@@ -129,19 +145,21 @@ class Repository:
                 event_key,first_player_key,second_player_key,first_player_name,second_player_name,
                 tournament_name,tournament_key,favorite_player_key,favorite_player_name,favorite_side,
                 first_seen_prematch_odds,latest_prematch_odds,first_seen_at,prematch_updated_at,
-                match_start_time,status,is_watched,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                match_start_time,status,is_watched,created_at,updated_at,event_type)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(event_key) DO UPDATE SET
                 first_player_name=excluded.first_player_name,second_player_name=excluded.second_player_name,
                 tournament_name=excluded.tournament_name,favorite_player_key=excluded.favorite_player_key,
                 favorite_player_name=excluded.favorite_player_name,favorite_side=excluded.favorite_side,
                 latest_prematch_odds=excluded.latest_prematch_odds,prematch_updated_at=excluded.prematch_updated_at,
                 match_start_time=excluded.match_start_time,
+                event_type=COALESCE(excluded.event_type,matches.event_type),
                 status=excluded.status,is_watched=excluded.is_watched,updated_at=excluded.updated_at""",
                 (event_key,str(first_key or ""),str(second_key or ""),first_name,second_name,
                  fixture.get("tournament_name"),str(fixture.get("tournament_key") or ""),str(player_key or ""),player_name,side,
                  str(value),str(value),stamp,stamp,
-                 f"{fixture.get('event_date','')}T{fixture.get('event_time','')}",status,int(eligible),stamp,stamp))
+                 f"{fixture.get('event_date','')}T{fixture.get('event_time','')}",status,int(eligible),stamp,stamp,
+                 fixture.get("event_type_type")))
             if not old or old["latest_prematch_odds"] != str(value):
                 self.conn.execute("INSERT INTO prematch_odds_history(event_key,home_median,away_median,favorite_side,favorite_odds,observed_at) VALUES (?,?,?,?,?,?)",
                                   (event_key,str(odds.home) if odds.home else None,str(odds.away) if odds.away else None,side,str(value),stamp))
@@ -242,14 +260,15 @@ class Repository:
         stamp = now()
         with self.conn:
             self.conn.execute("""INSERT INTO matches(event_key,first_player_key,second_player_key,
-                first_player_name,second_player_name,tournament_name,tournament_key,status,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,'LIVE',?,?) ON CONFLICT(event_key) DO UPDATE SET
+                first_player_name,second_player_name,tournament_name,tournament_key,status,created_at,updated_at,event_type)
+                VALUES (?,?,?,?,?,?,?,'LIVE',?,?,?) ON CONFLICT(event_key) DO UPDATE SET
+                event_type=COALESCE(excluded.event_type,matches.event_type),
                 first_player_name=COALESCE(excluded.first_player_name,matches.first_player_name),
                 second_player_name=COALESCE(excluded.second_player_name,matches.second_player_name),
                 tournament_name=COALESCE(excluded.tournament_name,matches.tournament_name)""",
                 (event_key,str(fixture.get("first_player_key") or ""),str(fixture.get("second_player_key") or ""),
                  fixture.get("event_first_player"),fixture.get("event_second_player"),fixture.get("tournament_name"),
-                 str(fixture.get("tournament_key") or ""),stamp,stamp))
+                 str(fixture.get("tournament_key") or ""),stamp,stamp,fixture.get("event_type_type")))
             inserted = self.conn.execute("INSERT OR IGNORE INTO third_set_sessions(event_key,decision,observed_at) VALUES (?,?,?)",(event_key,decision,stamp))
             if inserted.rowcount != 1:
                 return

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Genel bakış</h1>
+<p class="sub">Kazanma oranı, takip edilen tarafın maçı kazandığı sonuçlanmış alarmların payıdır. Başabaş oranı, ortalama alarm oranında kâra geçmek için gereken kazanma oranıdır (1 / oran).</p>
+<div class="filters">{% for d, label in periods %}<a href="/?days={{ d }}" class="{{ 'on' if days==d }}">{{ label }}</a>{% endfor %}</div>
+{% if not data.rows %}
+<div class="card">Bu dönemde alarm yok.</div>
+{% else %}
+<div class="cards">
+{% for rule in ['PREMATCH','THIRD_SET'] if rule in data.by_rule %}
+{% with title=rule_names[rule], s=data.by_rule[rule] %}{% include "_stats_card.html" %}{% endwith %}
+{% endfor %}
+{% with title="Toplam", s=data.by_rule['ALL'] %}{% include "_stats_card.html" %}{% endwith %}
+</div>
+{% endif %}
+
+<h2>Son 30 gün, günlük alarmlar</h2>
+<div class="chart"><canvas id="daily"></canvas></div>
+
+{% if data.by_type %}
+<h2>Maç türüne göre</h2>
+<div class="scroll"><table class="table">
+<tr><th>Tür</th><th class="num">Alarm</th><th class="num">Kazandı</th><th class="num">Kaybetti</th><th class="num">Bekliyor</th><th class="num">Kazanma</th><th class="num">Başabaş</th><th class="num">Teorik getiri</th></tr>
+{% for name, s in data.by_type %}
+<tr><td>{{ name }}</td><td class="num">{{ s.total }}</td><td class="num">{{ s.WON }}</td><td class="num">{{ s.LOST }}</td><td class="num">{{ s.PENDING }}</td>
+<td class="num">{{ pct(s.win_rate) }}</td><td class="num">{{ pct(s.break_even) }}</td><td class="num {{ 'pos' if s.profit > 0 else 'neg' if s.profit < 0 }}">{{ signed(s.profit) }}</td></tr>
+{% endfor %}
+</table></div>
+{% endif %}
+<p class="note">Teorik getiri, her alarma alarm anındaki orandan 1 birim yatırılmış gibi hesaplanır; o oranın gerçekten alınabildiğini varsayar.</p>
+{% endblock %}
+{% block scripts %}
+<script src="/static/chart.umd.min.js"></script>
+<script>
+const data = {{ chart | safe }};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const names = {WON:"Kazandı", LOST:"Kaybetti", PENDING:"Bekliyor", VOID:"Geçersiz"};
+new Chart(document.getElementById("daily"), {
+  type: "bar",
+  data: {labels: data.labels, datasets: Object.keys(names).map(k => ({label: names[k], data: data.series[k], backgroundColor: css("--" + k.toLowerCase())}))},
+  options: {animation: false, maintainAspectRatio: false, scales: {x: {stacked: true, ticks: {color: css("--muted")}, grid: {display: false}},
+    y: {stacked: true, beginAtZero: true, ticks: {precision: 0, color: css("--muted")}, grid: {color: css("--line")}}},
+    plugins: {legend: {labels: {color: css("--text")}}}}
+});
+</script>
+{% endblock %}

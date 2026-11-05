@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Aktif takip</h1>
+<h2>Maç önü kuralı ({{ matches|length }})</h2>
+<div class="scroll"><table class="table">
+<tr><th>Başlangıç</th><th>Maç</th><th>Takip edilen</th><th>Durum</th><th class="num">Maç önü</th><th class="num">Son canlı</th><th>Son canlı veri</th></tr>
+{% for m in matches %}
+<tr>
+<td>{{ (m.match_start_time or '-').replace('T',' ') }}</td>
+<td><a href="/match/{{ m.event_key }}">{{ m.first_player_name or '?' }} – {{ m.second_player_name or '?' }}</a><br><span class="note">{{ m.tournament_name or '' }}</span></td>
+<td>{{ m.favorite_player_name or m.favorite_side }}</td>
+<td>{{ status_names.get(m.status, m.status) }}</td>
+<td class="num">{{ m.latest_prematch_odds or '-' }}</td>
+<td class="num">{{ m.last_live or '-' }}</td>
+<td>{{ local(m.last_live_at, '%H:%M:%S') }}</td>
+</tr>
+{% else %}<tr><td colspan="7">Şu an takip edilen maç yok.</td></tr>{% endfor %}
+</table></div>
+<h2>3. set kuralı ({{ third|length }})</h2>
+<div class="scroll"><table class="table">
+<tr><th>Başlangıç</th><th>Maç</th><th>Takip edilen</th><th>Durum</th><th class="num">3. set başı</th><th class="num">Son oran</th></tr>
+{% for w in third %}
+<tr>
+<td>{{ local(w.observed_at, '%H:%M') }}</td>
+<td><a href="/match/{{ w.event_key }}">{{ w.first_player_name or '?' }} – {{ w.second_player_name or '?' }}</a><br><span class="note">{{ w.tournament_name or '' }}</span></td>
+<td>{{ w.favorite_player_name or w.favorite_side }}</td>
+<td>{{ status_names.get(w.status, w.status) }}</td>
+<td class="num">{{ w.opening_odds }}</td>
+<td class="num">{{ w.last_live or '-' }}</td>
+</tr>
+{% else %}<tr><td colspan="6">Şu an 3. set takibi yok.</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

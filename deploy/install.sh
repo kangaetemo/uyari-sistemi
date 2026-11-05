@@ -41,6 +41,7 @@ chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 install -m 644 "$APP_DIR/deploy/tennis-alert.service" /etc/systemd/system/tennis-alert.service
 install -m 644 "$APP_DIR/deploy/tennis-alert-backup.service" /etc/systemd/system/tennis-alert-backup.service
 install -m 644 "$APP_DIR/deploy/tennis-alert-backup.timer" /etc/systemd/system/tennis-alert-backup.timer
+install -m 644 "$APP_DIR/deploy/tennis-panel.service" /etc/systemd/system/tennis-panel.service
 systemctl daemon-reload
 systemctl enable --quiet tennis-alert.service tennis-alert-backup.timer
 systemctl start tennis-alert-backup.timer
@@ -50,4 +51,12 @@ if grep -qE '^API_TENNIS_KEY=.+' "$APP_DIR/.env"; then
   echo "Servis yeniden başlatıldı. Durum: systemctl status tennis-alert"
 else
   echo "API_TENNIS_KEY boş olduğu için servis başlatılmadı."
+fi
+
+if grep -qE '^PANEL_PASSWORD=.{8,}' "$APP_DIR/.env"; then
+  systemctl enable --quiet tennis-panel.service
+  systemctl restart tennis-panel.service
+  echo "Panel yeniden başlatıldı. Erişim: docs/PANEL.md"
+else
+  echo "PANEL_PASSWORD (en az 8 karakter) boş olduğu için panel başlatılmadı."
 fi
