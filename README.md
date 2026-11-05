@@ -12,6 +12,14 @@ Başlangıç, `get_livescore` yanıtındaki `Set 3`, üçüncü set oyunlarını
 
 Mevcut SQLite kayıtları korunarak alarm tablosu otomatik güncellenir. Eski şemadan ilk geçişte `data/*before-third-set-*.db` yedeği oluşturulur. Yeni başlangıçlar, takip geçmişi ve alarm durumları SQLite'da saklanır; yeniden başlatmak aynı alarmı tekrar oluşturmaz.
 
+## Canlı skor WebSocket'i
+
+`WEBSOCKET_ENABLED=true` (varsayılan) iken bot API-Tennis'in canlı skor WebSocket'ine bağlanır. Her sayıda gelen skorla üçüncü setin 0–0 başladığı an anında görülür ve bot bir sonraki taramayı beklemeden o anın oranını çeker; `get_livescore` sorgusu kullanılmaz. WebSocket oran göndermez, oranlar `get_live_odds` ile `LIVE_POLL_SECONDS` (3) saniyede bir çekilmeye devam eder. Bağlantı koparsa bot 1–60 saniye aralıklarla yeniden bağlanır ve bu sırada `get_livescore` ile çalışır. Bağlantıyı denemek için:
+
+```powershell
+python main.py --test-websocket
+```
+
 ## Sonuçlar ve rapor
 
 Takip edilen maçların sonucu (`get_fixtures` içindeki `event_winner`, yoksa set skoru) `match_results` tablosuna yazılır. Her alarm, takip edilen tarafa göre **Kazandı**, **Kaybetti**, **Bekliyor** veya **Geçersiz** (iptal/walkover) olarak sonuçlanır. Maçtan çekilmeyle biten sonuçlar raporda ayrıca belirtilir.
@@ -57,6 +65,7 @@ python main.py --scan-live
 python main.py --live-trigger 1.40
 python main.py --test-telegram
 python main.py --collect-results
+python main.py --test-websocket
 python main.py --report --days 30
 pytest
 ```

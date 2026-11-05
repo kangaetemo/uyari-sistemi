@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from app.core.parsers import parse_live_odds, parse_prematch_odds
 from app.core.results import parse_result
 from app.core.rules import eligible
-from app.core.third_set import FeedClock, process_third_set
+from app.core.third_set import FeedClock, is_third_set, opening_score, process_third_set
 from app.notifications.telegram import format_alert
 
 log = logging.getLogger(__name__)
@@ -37,8 +37,12 @@ def favorite_side(odds, minimum, maximum):
 
 
 class Monitor:
-    def __init__(self, config, api, repository, telegram):
+    def __init__(self, config, api, repository, telegram, stream=None):
         self.config, self.api, self.repo, self.telegram = config, api, repository, telegram
+        self.stream = stream
+        self._scan_now = asyncio.Event()
+        if stream is not None:
+            stream.listeners.append(self._on_stream_update)
         self.started = datetime.now().astimezone()
         self.clock = FeedClock()
         self._delivery_lock = asyncio.Lock()
@@ -115,11 +119,39 @@ class Monitor:
                 log.warning("ALARM | %s | %s -> %s",match["favorite_player_name"],match["latest_prematch_odds"],odd)
             seen.append((key,match["favorite_player_name"],odd))
         if third_set_enabled:
-            if await process_third_set(self.config,self.api,self.repo,live,clock=self.clock):
+            scores = self.stream.matches if self.stream_ready() else None
+            if await process_third_set(self.config,self.api,self.repo,live,clock=self.clock,scores=scores):
                 alerted = True
         if alerted:
             self._alerts_ready.set()  # Delivery runs in its own loop so Telegram never stalls polling.
         return seen
+
+    def stream_ready(self):
+        """Use WebSocket scores only while the socket is connected; otherwise fall back to get_livescore."""
+        return self.stream is not None and self.stream.connected
+
+    def _on_stream_update(self, rows):
+        """A third set just reached 0-0: scan now instead of waiting for the next poll."""
+        if not self.config.third_set_enabled:
+            return
+        for row in rows:
+            key = str(row["event_key"])
+            if is_third_set(str(row.get("event_status") or "")) and opening_score(row) and not self.repo.third_set_decided(key):
+                log.info("3. SET | event=%s | WebSocket: set 0-0 başladı; hemen taranıyor", key)
+                self._scan_now.set()
+                return
+
+    async def live_loop(self, seconds):
+        while True:
+            try:
+                await self.scheduled_live_scan()
+            except Exception:
+                log.exception("Tarama hatası; döngü devam edecek")
+            try:
+                await asyncio.wait_for(self._scan_now.wait(), timeout=seconds)
+            except asyncio.TimeoutError:
+                pass
+            self._scan_now.clear()
 
     def _heartbeat(self, live_events):
         """Let the panel show that the bot is alive without a write on every 5 s poll."""
@@ -129,6 +161,9 @@ class Monitor:
         self._last_heartbeat = moment
         self.repo.set_state("last_live_scan", datetime.now(timezone.utc).isoformat())
         self.repo.set_state("live_events", live_events)
+        if self.stream is not None:
+            self.repo.set_state("stream_connected", int(self.stream.connected))
+            self.repo.set_state("stream_messages", self.stream.messages)
 
     async def diagnose_live(self):
         """Read-only API/watchlist inspection, including when watchlist is empty."""
@@ -291,8 +326,9 @@ class Monitor:
             await asyncio.sleep(self.config.status_poll_seconds)
             try:
                 count = len(self.repo.watched())
-                log.info("STATUS | uptime=%s | watchlist=%s | bugün alarm=%s | API requests=%s | son başarılı=%s",
+                stream = (f"bağlı, {self.stream.messages} mesaj" if self.stream.connected else "kopuk") if self.stream else "kapalı"
+                log.info("STATUS | uptime=%s | watchlist=%s | bugün alarm=%s | API requests=%s | WebSocket=%s | son başarılı=%s",
                          datetime.now().astimezone()-self.started,count,self.repo.count_today_alerts(self.config.timezone),
-                         dict(self.api.counts),self.api.last_success)
+                         dict(self.api.counts),stream,self.api.last_success)
             except Exception:
                 log.exception("Durum kaydı yazılamadı")

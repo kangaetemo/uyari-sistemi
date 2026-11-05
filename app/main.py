@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from app.api.live_stream import LiveScoreStream
 from app.api.tennis import TennisAPI
 from app.config import load_config, parse_decimal, validate_live_trigger
 from app.core.results import format_report
@@ -40,7 +41,8 @@ async def run(args):
     api = TennisAPI(config.api_key, config.timezone.key) if not args.test_telegram else None
     repo = Repository(config.database_path)
     telegram = Telegram(config.telegram_token,config.telegram_chat_id,config.dry_run,config.timezone)
-    monitor = Monitor(config,api,repo,telegram) if api else None
+    stream = LiveScoreStream(config.api_key, config.timezone.key) if api and config.websocket_enabled else None
+    monitor = Monitor(config,api,repo,telegram,stream) if api else None
     try:
         if args.test_telegram:
             result = await telegram.send("🎾 Tennis Alert test bildirimi.\nTelegram bağlantısı çalışıyor.",force=True)
@@ -60,12 +62,15 @@ async def run(args):
             await monitor.deliver_alerts()
         elif args.collect_results:
             await monitor.maintenance()
+        elif args.test_websocket:
+            await test_websocket(LiveScoreStream(config.api_key, config.timezone.key))
         else:
-            logging.info("Tennis Alert başladı | dry_run=%s | live=%ss | 3. set=%s",
-                         config.dry_run, config.live_poll_seconds, config.third_set_enabled)
+            logging.info("Tennis Alert başladı | dry_run=%s | live=%ss | 3. set=%s | WebSocket=%s",
+                         config.dry_run, config.live_poll_seconds, config.third_set_enabled, bool(stream))
             await asyncio.gather(
+                *([stream.run()] if stream else []),
                 monitor.loop(monitor.prematch_scan,config.prematch_poll_seconds),
-                monitor.loop(monitor.scheduled_live_scan,config.live_poll_seconds),
+                monitor.live_loop(config.live_poll_seconds),
                 monitor.delivery_loop(),
                 monitor.loop(monitor.maintenance,config.result_poll_seconds),
                 monitor.status_loop())
@@ -77,6 +82,33 @@ async def run(args):
         repo.close()
 
 
+async def test_websocket(stream, seconds=30):
+    """Listen for a while and summarise what the socket sends; nothing is written."""
+    statuses = {}
+
+    def count(rows):
+        for row in rows:
+            statuses[str(row.get("event_status") or "?")] = statuses.get(str(row.get("event_status") or "?"), 0) + 1
+    stream.listeners.append(count)
+    task = asyncio.create_task(stream.run())
+    await asyncio.sleep(seconds)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    if not stream.messages:
+        raise RuntimeError(f"{seconds} saniyede WebSocket mesajı gelmedi; paket WebSocket içermiyor olabilir veya şu an canlı maç yok")
+    logging.info("WebSocket çalışıyor: %s saniyede %s mesaj, %s canlı maç", seconds, stream.messages, len(stream.matches))
+    for status, total in sorted(statuses.items(), key=lambda item: -item[1])[:8]:
+        logging.info("  %s: %s güncelleme", status, total)
+    third = [m for m in stream.matches.values() if str(m.get("event_status")).strip().lower() == "set 3"]
+    for match in third[:5]:
+        sets = {str(s.get("score_set")): f"{s.get('score_first')}-{s.get('score_second')}" for s in match.get("scores") or [] if isinstance(s, dict)}
+        logging.info("  3. set: %s vs %s | setler %s | oyun %s", match.get("event_first_player"),
+                     match.get("event_second_player"), sets, match.get("event_game_result"))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Tenis canlı oran ve Telegram alarm sistemi")
     modes = parser.add_mutually_exclusive_group()
@@ -84,6 +116,7 @@ def main():
     modes.add_argument("--scan-prematch",action="store_true")
     modes.add_argument("--scan-live",action="store_true")
     modes.add_argument("--test-telegram",action="store_true")
+    modes.add_argument("--test-websocket",action="store_true",help="WebSocket bağlantısını 30 sn dinle ve özetle")
     modes.add_argument("--collect-results",action="store_true",help="Eski takipleri kapat ve maç sonuçlarını topla")
     modes.add_argument("--report",action="store_true",help="Alarm sonuçları ve kazanma oranı raporu")
     parser.add_argument("--days",type=int,default=30,help="--report için gün sayısı (varsayılan 30)")

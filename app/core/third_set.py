@@ -88,18 +88,25 @@ class FeedClock:
         return (self.newest - stamp).total_seconds() <= max_age
 
 
-async def process_third_set(config, api, repo, live, *, clock):
-    """Capture new third-set openings and follow open watches; returns the number of new alerts."""
+async def process_third_set(config, api, repo, live, *, clock, scores=None):
+    """Capture new third-set openings and follow open watches; returns the number of new alerts.
+
+    `scores` is the WebSocket's latest fixture per event_key; without it the
+    scores come from one `get_livescore` call.
+    """
     clock.observe(live)
     created = 0
     max_age = config.third_set_odds_max_age_seconds
     candidates = {key:item for key,item in live.items()
                   if is_third_set(item.status) and not repo.third_set_decided(key)}
     if candidates:
-        payload = await api.livescore()
-        result = (payload or {}).get("result")
-        fixtures = {str(row["event_key"]):row for row in result
-                    if isinstance(row,dict) and row.get("event_key") is not None} if isinstance(result,list) else {}
+        if scores is not None:
+            fixtures = scores
+        else:
+            payload = await api.livescore()
+            result = (payload or {}).get("result")
+            fixtures = {str(row["event_key"]):row for row in result
+                        if isinstance(row,dict) and row.get("event_key") is not None} if isinstance(result,list) else {}
         for key, item in candidates.items():
             fixture = fixtures.get(key)
             if not fixture:
