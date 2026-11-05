@@ -1,10 +1,23 @@
-# Sunucu kurulumu (Proxmox LXC / Debian / Ubuntu)
+# Sunucu kurulumu (VDS / Proxmox LXC / Debian / Ubuntu)
 
 Bu kurulum botu bilgisayar oturumundan bağımsız, 7/24 bir `systemd` servisi olarak çalıştırır. Servis çökerse 15 saniye sonra kendini yeniden başlatır ve her gece 04:30'da (UTC) SQLite yedeği alınır.
 
-## 1. LXC kapsayıcısı
+## 1. Sunucu
 
-Proxmox arayüzünde bir Debian 12 veya Ubuntu 24.04 şablonuyla kapsayıcı oluşturun. Bu bot için 1 çekirdek, 512 MB RAM ve 4 GB disk yeterlidir. Kapsayıcının internete çıkabildiğini ve saatinin doğru olduğunu kontrol edin:
+Kiralık bir VDS/VPS veya Proxmox LXC olabilir; adımlar aynıdır. Debian 12 veya Ubuntu 24.04 seçin. Bu bot için 1 çekirdek, 512 MB–1 GB RAM ve 10 GB disk yeterlidir. Bot dışarıdan bağlantı kabul etmez, yalnızca API-Tennis ve Telegram'a çıkar; bu yüzden SSH dışında port açmaya gerek yoktur.
+
+Kiralık VDS için ilk güvenlik adımları (root olarak):
+
+```bash
+apt-get update && apt-get upgrade -y
+apt-get install -y ufw unattended-upgrades
+ufw allow OpenSSH && ufw --force enable   # Yalnızca SSH açık kalır
+dpkg-reconfigure -plow unattended-upgrades   # Güvenlik güncellemeleri otomatik
+```
+
+Mümkünse SSH'a parola yerine anahtarla girin ve parola girişini kapatın (`/etc/ssh/sshd_config` içinde `PasswordAuthentication no`).
+
+Proxmox LXC için arayüzde bir Debian 12 veya Ubuntu 24.04 şablonuyla kapsayıcı oluşturmanız yeterlidir. Kapsayıcının internete çıkabildiğini ve saatinin doğru olduğunu kontrol edin:
 
 ```bash
 ping -c1 api.api-tennis.com
