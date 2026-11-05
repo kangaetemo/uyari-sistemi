@@ -26,6 +26,10 @@ Alarmdan sonra da oran geçmişi toplanmaya devam eder: maç önü kuralında ma
 
 Feed'in kapatmadığı takipler otomatik kapanır: başlangıç saatinden `MATCH_EXPIRY_HOURS` (8) saat sonra canlıya geçmemiş maçlar ve canlı akışta `LIVE_STALE_MINUTES` (45) dakika görünmeyen maçlar `EXPIRED` olur. Bu iş ve sonuç toplama `RESULT_POLL_SECONDS` (1800) saniyede bir çalışır; elle `python main.py --collect-results` ile de tetiklenebilir.
 
+## İstatistik paneli
+
+`python -m app.web` botun veritabanını okuyan bir web paneli açar: kural bazında kazanma oranı ve teorik getiri, alarm listesi, maç başına oran grafiği, aktif takipler ve farklı eşiklerin geçmiş veriyle karşılaştırması. `.env` içinde `PANEL_PASSWORD` gerekir. Ayrıntı ve uzaktan erişim: [docs/PANEL.md](docs/PANEL.md).
+
 ## Sunucu (7/24)
 
 Proxmox LXC veya herhangi bir Debian/Ubuntu sunucuda `systemd` servisi olarak kurulum: [docs/SUNUCU_KURULUMU.md](docs/SUNUCU_KURULUMU.md).

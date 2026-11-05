@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Eşik analizi</h1>
+<p class="sub">Kaydedilmiş oran geçmişi üzerinde "alarm eşiği farklı olsaydı ne olurdu" sorusunu yanıtlar. Her maç, eşiğe ilk ulaştığı fiyatla bir kez sayılır; yalnızca sonucu belli olan maçlar hesaba girer.</p>
+<form class="filters" method="get" action="/analysis">
+<select name="rule">{% for r in ['PREMATCH','THIRD_SET'] %}<option value="{{ r }}" {{ 'selected' if rule==r }}>{{ rule_names[r] }}</option>{% endfor %}</select>
+<select name="days">{% for d, label in periods %}<option value="{{ d }}" {{ 'selected' if days==d }}>{{ label }}</option>{% endfor %}</select>
+<input name="pmin" value="{{ pmin }}" placeholder="ref. min" inputmode="decimal">
+<input name="pmax" value="{{ pmax }}" placeholder="ref. max" inputmode="decimal">
+<button type="submit">Hesapla</button>
+</form>
+<p class="note">Referans: maç önü kuralında maç önü oranı, 3. set kuralında set başındaki oran. Örneğin maç önü 1.01–1.20 arasındaki favorileri ayrı görmek için min 1.01, max 1.20 yazın.
+{{ data.matches }} sonuçlanmış maç{% if data.pending %}, {{ data.pending }} maç sonuç bekliyor{% endif %}.</p>
+<div class="scroll"><table class="table">
+<tr><th class="num">Eşik</th><th class="num">Alarm</th><th class="num">Kazandı</th><th class="num">Kaybetti</th><th class="num">Kazanma</th><th class="num">Başabaş</th><th class="num">Teorik getiri</th><th class="num">Getiri %</th></tr>
+{% for row in data.rows %}
+<tr><td class="num">{{ '>' if data.strict else '≥' }} {{ row.threshold }}</td><td class="num">{{ row.alerts }}</td><td class="num">{{ row.won }}</td><td class="num">{{ row.lost }}</td>
+<td class="num">{{ pct(row.win_rate) }}</td><td class="num">{{ pct(row.break_even) }}</td>
+<td class="num {{ 'pos' if row.profit > 0 else 'neg' if row.profit < 0 }}">{{ signed(row.profit) }}</td><td class="num">{{ pct(row.roi) }}</td></tr>
+{% else %}<tr><td colspan="8">Henüz sonuçlanmış maç yok.</td></tr>{% endfor %}
+</table></div>
+<p class="note">Sınırlar: geçmiş yalnızca fiyat değiştiğinde kaydedilir ve 5 saniyelik tarama anlarını yansıtır. Bu sürümden önceki maçlarda alarmdan sonra veri olmadığı için yüksek eşiklerde eski maçlar eksik kalır. Az sayıda sonuçla oranlar büyük ölçüde rastlantıya bağlıdır.</p>
+{% endblock %}

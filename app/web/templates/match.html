@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ detail.match.first_player_name }} – {{ detail.match.second_player_name }}{% endblock %}
+{% block content %}
+{% set m = detail.match %}{% set r = detail.result %}
+<h1>{{ m.first_player_name or '?' }} – {{ m.second_player_name or '?' }}</h1>
+<p class="sub">{{ m.tournament_name or '' }}{% if m.event_type %} · {{ m.event_type }}{% endif %} · {{ (m.match_start_time or '').replace('T',' ') }} · {{ status_names.get(m.status, m.status) }}</p>
+<div class="cards">
+<div class="card"><h3>Sonuç</h3>
+{% if r %}<div class="kv">
+<span>Kazanan</span><span>{% if r.winner_side == 'Home' %}{{ m.first_player_name }}{% elif r.winner_side == 'Away' %}{{ m.second_player_name }}{% else %}-{% endif %}</span>
+<span>Skor</span><span>{{ r.final_result or '-' }}</span><span>Bitiş</span><span>{{ r.provider_status }}</span></div>
+{% else %}<div class="note">Henüz sonuç yok.</div>{% endif %}
+</div>
+<div class="card"><h3>Maç önü</h3><div class="kv">
+<span>Takip edilen</span><span>{{ m.favorite_player_name or '-' }} ({{ m.favorite_side or '-' }})</span>
+<span>İlk görülen</span><span>{{ m.first_seen_prematch_odds or '-' }}</span>
+<span>Son</span><span>{{ m.latest_prematch_odds or '-' }}</span></div></div>
+{% for a in detail.alerts %}
+<div class="card"><h3>Alarm: {{ rule_names[a.rule_type] }}</h3><div class="kv">
+<span>Zaman</span><span>{{ local(a.created_at, '%d.%m %H:%M:%S') }}</span>
+<span>Taraf</span><span>{{ a.favorite_player_name or a.favorite_side }}</span>
+<span>Referans → alarm</span><span>{{ a.reference_odds or '-' }} → {{ a.trigger_live_odds }}</span>
+<span>Telegram</span><span>{{ 'gönderildi' if a.telegram_sent else 'gönderilmedi (' ~ a.attempts ~ ' deneme)' }}</span></div></div>
+{% endfor %}
+</div>
+<div id="charts"></div>
+{% if not detail.live and not detail.third %}<p class="note">Bu maç için canlı oran geçmişi yok.</p>{% endif %}
+<p class="note">Oran geçmişi yalnızca fiyat değiştiğinde kaydedilir. Bu sürümden önce toplanan maçlarda alarmdan sonraki oranlar kayıtlı değildir.</p>
+{% endblock %}
+{% block scripts %}
+<script src="/static/chart.umd.min.js"></script>
+<script>
+const charts = {{ charts | safe }};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const root = document.getElementById("charts");
+charts.forEach(c => {
+  const h = document.createElement("h2"); h.textContent = c.title; root.appendChild(h);
+  const box = document.createElement("div"); box.className = "chart"; const canvas = document.createElement("canvas"); box.appendChild(canvas); root.appendChild(box);
+  const flat = v => c.labels.map(() => v);
+  const sets = [{label: "Oran", data: c.values, borderColor: css("--accent"), backgroundColor: css("--accent"), stepped: true,
+    pointBackgroundColor: c.labels.map((_, i) => i === c.alert_index ? css("--lost") : css("--accent")),
+    pointRadius: c.labels.map((_, i) => i === c.alert_index ? 6 : 2)}];
+  if (c.threshold) sets.push({label: "Eşik " + c.threshold.toFixed(2), data: flat(c.threshold), borderColor: css("--lost"), borderDash: [6, 4], pointRadius: 0, borderWidth: 1.5});
+  if (c.reference) sets.push({label: "Referans " + c.reference.toFixed(2), data: flat(c.reference), borderColor: css("--muted"), borderDash: [2, 3], pointRadius: 0, borderWidth: 1.5});
+  new Chart(canvas, {type: "line", data: {labels: c.labels, datasets: sets},
+    options: {animation: false, maintainAspectRatio: false, interaction: {mode: "index", intersect: false},
+      scales: {x: {ticks: {color: css("--muted"), maxTicksLimit: 10}, grid: {display: false}}, y: {ticks: {color: css("--muted")}, grid: {color: css("--line")}}},
+      plugins: {legend: {labels: {color: css("--text")}}}}});
+});
+</script>
+{% endblock %}

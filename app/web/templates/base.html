@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Tenis alarm paneli{% endblock %}</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#1d2330;--muted:#677086;--line:#e3e6ec;--accent:#2f6fde;
+--won:#1f9d55;--lost:#d64545;--pending:#8a93a6;--void:#c3c8d2;--warn:#b7791f}
+@media (prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b2029;--text:#e6e9ef;--muted:#9aa3b5;--line:#2b313d;
+--accent:#6b9cf5;--won:#3cc47c;--lost:#f06b6b;--pending:#7b8496;--void:#4a5160;--warn:#e0a84a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{background:var(--card);border-bottom:1px solid var(--line)}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
+nav{display:flex;flex-wrap:wrap;gap:4px 18px;align-items:center;padding:12px 0}
+nav .brand{font-weight:700;margin-right:12px}
+nav a{color:var(--muted);text-decoration:none;padding:4px 0;border-bottom:2px solid transparent}
+nav a.on{color:var(--text);border-color:var(--accent)}
+main{padding:20px 0 40px}
+h1{font-size:22px;margin:0 0 4px}
+h2{font-size:17px;margin:28px 0 10px}
+.sub{color:var(--muted);margin:0 0 16px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h3{margin:0 0 8px;font-size:15px}
+.big{font-size:28px;font-weight:700;line-height:1.1}
+.kv{display:grid;grid-template-columns:auto auto;gap:2px 12px;font-size:14px}
+.kv span:nth-child(odd){color:var(--muted)}
+.table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:14px}
+.table th,.table td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+.table th{color:var(--muted);font-weight:600;font-size:13px}
+.table td.num,.table th.num{text-align:right;font-variant-numeric:tabular-nums}
+.scroll{overflow-x:auto;border-radius:10px}
+.badge{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;color:#fff}
+.WON{background:var(--won)}.LOST{background:var(--lost)}.PENDING{background:var(--pending)}.VOID{background:var(--void);color:var(--text)}
+.filters{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
+.filters a,.filters button,.filters input,.filters select{font:inherit;font-size:14px;padding:5px 10px;border-radius:8px;border:1px solid var(--line);
+background:var(--card);color:var(--text);text-decoration:none}
+.filters a.on{border-color:var(--accent);color:var(--accent);font-weight:600}
+.filters input{width:90px}
+.note{color:var(--muted);font-size:13px;margin:8px 0}
+.warn{color:var(--warn)}
+.status{font-size:13px;color:var(--muted);padding-bottom:10px}
+.status b.ok{color:var(--won)}.status b.bad{color:var(--lost)}
+a{color:var(--accent)}
+.chart{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;height:300px}
+.pos{color:var(--won)}.neg{color:var(--lost)}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+<nav>
+<span class="brand">Tenis alarm</span>
+<a href="/" class="{{ 'on' if page=='overview' }}">Genel bakış</a>
+<a href="/alerts" class="{{ 'on' if page=='alerts' }}">Alarmlar</a>
+<a href="/active" class="{{ 'on' if page=='active' }}">Aktif takip</a>
+<a href="/analysis" class="{{ 'on' if page=='analysis' }}">Eşik analizi</a>
+</nav>
+{% set scan = state.get('last_live_scan') %}
+{% set age = ago(scan['value']) if scan else None %}
+<div class="status">Bot:
+{% if age is none %}<b class="bad">henüz tarama kaydı yok</b>
+{% elif age < 300 %}<b class="ok">çalışıyor</b>, son canlı tarama {{ age }} sn önce{% if state.get('live_events') %}, {{ state['live_events']['value'] }} canlı maç{% endif %}
+{% else %}<b class="bad">son canlı tarama {{ (age // 60) }} dk önce</b>{% endif %}
+</div>
+</div></header>
+<main><div class="wrap">
+{% block content %}{% endblock %}
+</div></main>
+{% block scripts %}{% endblock %}
+</body>
+</html>
