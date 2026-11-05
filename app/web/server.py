@@ -106,7 +106,7 @@ def create_app(database_path: Path, username: str, password: str, tz):
         if alert is None:
             return None
         for index, row in enumerate(rows):
-            if row["observed_at"] == alert["created_at"]:
+            if row["observed_at"] == alert["created_at"] and row["live_odds"] == alert["trigger_live_odds"]:
                 return index
         return next((i for i, row in enumerate(rows) if row["live_odds"] == alert["trigger_live_odds"]), None)
 
