@@ -1,11 +1,13 @@
 import argparse
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from app.api.tennis import TennisAPI
-from app.config import load_config
+from app.config import load_config, parse_decimal, validate_live_trigger
+from app.core.results import format_report
 from app.core.monitor import Monitor
 from app.db.repository import Repository
 from app.notifications.telegram import Telegram
@@ -20,16 +22,22 @@ def setup_logging(level):
 
 
 async def run(args):
-    config = load_config(test_telegram=args.test_telegram)
+    config = load_config(test_telegram=args.test_telegram, require_api=not args.report)
     setup_logging(config.log_level)
     if args.live_trigger is not None:
         from dataclasses import replace
-        from decimal import Decimal
-        value = Decimal(args.live_trigger)
-        if value <= 1:
-            raise ValueError("--live-trigger > 1 olmalı")
+        value = parse_decimal("--live-trigger", args.live_trigger)
+        validate_live_trigger(value, config.prematch_max)
         config = replace(config,live_trigger=value)
-    api = TennisAPI(config.api_key) if not args.test_telegram else None
+    if args.report:
+        repo = Repository(config.database_path)
+        try:
+            since = datetime.now(timezone.utc) - timedelta(days=args.days)
+            print(format_report(repo.alerts_with_results(since), args.days))
+        finally:
+            repo.close()
+        return
+    api = TennisAPI(config.api_key, config.timezone.key) if not args.test_telegram else None
     repo = Repository(config.database_path)
     telegram = Telegram(config.telegram_token,config.telegram_chat_id,config.dry_run,config.timezone)
     monitor = Monitor(config,api,repo,telegram) if api else None
@@ -50,11 +58,16 @@ async def run(args):
             await monitor.prematch_scan()
             await monitor.live_scan()
             await monitor.deliver_alerts()
+        elif args.collect_results:
+            await monitor.maintenance()
         else:
+            logging.info("Tennis Alert başladı | dry_run=%s | live=%ss | 3. set=%s",
+                         config.dry_run, config.live_poll_seconds, config.third_set_enabled)
             await asyncio.gather(
                 monitor.loop(monitor.prematch_scan,config.prematch_poll_seconds),
                 monitor.loop(monitor.scheduled_live_scan,config.live_poll_seconds),
-                monitor.loop(monitor.deliver_alerts,30),
+                monitor.delivery_loop(),
+                monitor.loop(monitor.maintenance,config.result_poll_seconds),
                 monitor.status_loop())
     finally:
         logging.info("Tennis Alert güvenli şekilde kapatılıyor...")
@@ -71,6 +84,9 @@ def main():
     modes.add_argument("--scan-prematch",action="store_true")
     modes.add_argument("--scan-live",action="store_true")
     modes.add_argument("--test-telegram",action="store_true")
+    modes.add_argument("--collect-results",action="store_true",help="Eski takipleri kapat ve maç sonuçlarını topla")
+    modes.add_argument("--report",action="store_true",help="Alarm sonuçları ve kazanma oranı raporu")
+    parser.add_argument("--days",type=int,default=30,help="--report için gün sayısı (varsayılan 30)")
     parser.add_argument("--live-trigger",help="Canlı alarm eşiği")
     args = parser.parse_args()
     try:
@@ -79,3 +95,6 @@ def main():
         pass
     except (ValueError,RuntimeError) as exc:
         parser.exit(2,f"Hata: {exc}\n")
+    except Exception:
+        logging.exception("Beklenmeyen hata; uygulama kapanıyor")
+        parser.exit(1,"Beklenmeyen hata; ayrıntı logs/tennis-alert.log içinde.\n")

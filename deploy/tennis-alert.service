@@ -1,0 +1,21 @@
+[Unit]
+Description=Tenis oran alarmı (API-Tennis -> Telegram)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=tennis
+Group=tennis
+WorkingDirectory=/opt/uyari-sistemi
+ExecStart=/opt/uyari-sistemi/.venv/bin/python main.py
+Restart=always
+RestartSec=15
+# Uygulama zaten logs/tennis-alert.log dosyasına yazıyor; journald kopyası da `journalctl -u tennis-alert` ile okunur.
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

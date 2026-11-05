@@ -28,7 +28,8 @@ class Telegram:
             if not data.get("ok"):
                 raise ValueError("Telegram API ok=false")
             return data["result"]["message_id"]
-        except (httpx.HTTPError, ValueError, KeyError) as exc:
+        except Exception as exc:  # noqa: BLE001 - a bad response must never stop the alert queue
+            # Only the type is logged: httpx messages contain the URL, which carries the bot token.
             log.error("Telegram gönderimi başarısız: %s", type(exc).__name__)
             return None
 
