@@ -1,0 +1,203 @@
+import asyncio
+import logging
+from datetime import datetime, timedelta
+
+from app.core.parsers import parse_live_odds, parse_prematch_odds
+from app.core.rules import eligible
+from app.core.third_set import process_third_set
+from app.notifications.telegram import format_alert
+
+log = logging.getLogger(__name__)
+
+
+def event_state(fixture):
+    status = str(fixture.get("event_status") or "").lower()
+    if any(word in status for word in ("cancel", "postpon", "walkover", "retired", "abandon")):
+        return "CANCELLED"
+    if "finish" in status or "ended" in status:
+        return "FINISHED"
+    if str(fixture.get("event_live")) == "1" or status.startswith("set "):
+        return "LIVE"
+    return "PREMATCH"
+
+
+class Monitor:
+    def __init__(self, config, api, repository, telegram):
+        self.config, self.api, self.repo, self.telegram = config, api, repository, telegram
+        self.started = datetime.now().astimezone()
+        self._delivery_lock = asyncio.Lock()
+
+    async def prematch_scan(self):
+        local_date = datetime.now(self.config.timezone).date()
+        stop = local_date + timedelta(days=1)
+        fixtures, odds_data = await asyncio.gather(
+            self.api.fixtures(local_date.isoformat(),stop.isoformat()),
+            self.api.prematch_odds(local_date.isoformat(),stop.isoformat()))
+        if not fixtures or not odds_data:
+            log.warning("Prematch taraması eksik API cevabı nedeniyle atlandı")
+            return []
+        fixture_map = {str(f["event_key"]):f for f in fixtures.get("result",[]) if isinstance(f,dict) and f.get("event_key") is not None}
+        odds_map = parse_prematch_odds(odds_data)
+        found = []
+        for key, fixture in fixture_map.items():
+            state = event_state(fixture)
+            if state in {"FINISHED", "CANCELLED"} and self.repo.get_match(key):
+                self.repo.set_status(key,state)
+        for key, odds in odds_map.items():
+            fixture = fixture_map.get(key)
+            if not fixture:
+                continue
+            state = event_state(fixture)
+            if state in {"FINISHED","CANCELLED"}:
+                if self.repo.get_match(key):
+                    self.repo.set_status(key,state)
+                continue
+            if state == "LIVE":
+                continue  # Never replace the last prematch reference with in-play prices.
+            old = self.repo.get_match(key)
+            side = old["favorite_side"] if old else None
+            if not side:
+                side = "Home" if eligible(odds.home,self.config.prematch_min,self.config.prematch_max) else "Away" if eligible(odds.away,self.config.prematch_min,self.config.prematch_max) else None
+            if not side and odds.home is not None and odds.away is not None:
+                side = "Home" if odds.home < odds.away else "Away" if odds.away < odds.home else None
+            if not side:
+                continue
+            value = odds.home if side == "Home" else odds.away
+            is_eligible = eligible(value,self.config.prematch_min,self.config.prematch_max)
+            self.repo.upsert_prematch(key,fixture,odds,side,is_eligible)
+            if is_eligible:
+                found.append((key,fixture,side,value))
+        log.info("Prematch: %s fixture, %s uygun favori",len(fixture_map),len(found))
+        return found
+
+    async def live_scan(self):
+        watched = self.repo.watched()
+        third_set_enabled = self.config.third_set_enabled
+        if not watched and not third_set_enabled:
+            return []
+        payload = await self.api.live_odds()
+        if not payload:
+            return []
+        live = parse_live_odds(payload)
+        seen = []
+        for key, match in watched.items():
+            item = live.get(key)
+            if not item:
+                continue
+            state = event_state({"event_status":item.status,"event_live":"1"})
+            if state in {"FINISHED","CANCELLED"}:
+                self.repo.set_status(key,state)
+                continue
+            odd = item.home if match["favorite_side"] == "Home" else item.away
+            if odd is None:
+                continue
+            updated = item.home_updated_at if match["favorite_side"] == "Home" else item.away_updated_at
+            log.info("LIVE | event=%s | %s | %s",key,match["favorite_player_name"],odd)
+            if self.repo.record_live(match,odd,updated,self.config.live_trigger):
+                log.warning("ALARM | %s | %s -> %s",match["favorite_player_name"],match["latest_prematch_odds"],odd)
+            seen.append((key,match["favorite_player_name"],odd))
+        if third_set_enabled:
+            await process_third_set(self.config,self.api,self.repo,live)
+        await self.deliver_alerts()
+        return seen
+
+    async def diagnose_live(self):
+        """Read-only API/watchlist inspection, including when watchlist is empty."""
+        watched = self.repo.watched()
+        log.info("Aktif watchlist: %s maç", len(watched))
+        third_watches = self.repo.third_set_watched()
+        log.info("Aktif 3. set takibi: %s taraf", len(third_watches))
+        if not watched:
+            log.info("Aktif watchlist boş; karşılaştırılacak maç yok.")
+        payload = await self.api.live_odds()
+        if payload is None:
+            log.warning("Live API verisi alınamadı veya success != 1.")
+            return
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            log.warning("Live API result beklenen nesne yapısında değil.")
+            return
+        live = parse_live_odds(payload)
+        log.info("Live API: %s event alındı", len(result))
+        usable = sum(item.home is not None or item.away is not None for item in live.values())
+        log.info("Kullanılabilir To Win marketi: %s", usable)
+        if not result:
+            log.info("API şu anda live event döndürmedi.")
+        matched = watched.keys() & live.keys()
+        log.info("Watchlist ile eşleşen live event: %s", len(matched))
+        if result and watched and not matched:
+            log.info("Live maçlar mevcut ancak aktif watchlist ile event_key eşleşmesi bulunamadı.")
+        for key in sorted(matched):
+            match, item = watched[key], live[key]
+            odd = item.home if match["favorite_side"] == "Home" else item.away
+            if odd is None:
+                log.info("%s | Live event bulundu ancak kullanılabilir To Win marketi bulunamadı", key)
+            else:
+                log.info("%s | %s vs %s | Favori: %s | Prematch: %s | Live: %s",
+                         key, match["first_player_name"] or "?", match["second_player_name"] or "?",
+                         match["favorite_side"], match["latest_prematch_odds"], odd)
+        for watch in third_watches:
+            item = live.get(watch["event_key"])
+            if item:
+                odd = item.home if watch["favorite_side"] == "Home" else item.away
+                log.info("3. SET | event=%s | taraf=%s | başlangıç=%s | canlı=%s | durum=%s",
+                         watch["event_key"],watch["favorite_side"],watch["opening_odds"],odd,item.status)
+        for key, record in list(result.items())[:5]:
+            if not isinstance(record, dict):
+                continue
+            event_key = str(record.get("event_key") or key)
+            item = live.get(event_key)
+            if item is None:
+                continue
+            first = record.get("event_first_player") or (f"Oyuncu #{record['first_player_key']}" if record.get("first_player_key") else "?")
+            second = record.get("event_second_player") or (f"Oyuncu #{record['second_player_key']}" if record.get("second_player_key") else "?")
+            log.info("%s | %s vs %s | Status: %s | To Win Home: %s | Away: %s",
+                     event_key, first, second,
+                     item.status or "?", item.home if item.home is not None else "yok",
+                     item.away if item.away is not None else "yok")
+
+    async def scheduled_live_scan(self):
+        if self.config.third_set_enabled:
+            await self.live_scan()
+            return
+        watched = self.repo.watched()
+        if not watched:
+            return
+        current = datetime.now(self.config.timezone)
+        for match in watched.values():
+            if match["status"] == "LIVE":
+                await self.live_scan()
+                return
+            try:
+                start = datetime.fromisoformat(match["match_start_time"]).replace(tzinfo=self.config.timezone)
+            except (TypeError,ValueError):
+                await self.live_scan()
+                return
+            if start <= current + timedelta(hours=2):
+                await self.live_scan()
+                return
+
+    async def deliver_alerts(self):
+        async with self._delivery_lock:
+            for alert in self.repo.pending_alerts():
+                message_id = await self.telegram.send(format_alert(alert,self.config.timezone))
+                if message_id is not None:
+                    self.repo.mark_sent(alert["id"],message_id)
+                    log.info("Telegram bildirimi gönderildi: event=%s",alert["event_key"])
+                else:
+                    self.repo.mark_failed(alert["id"],min(30 * 2 ** alert["attempts"],900))
+
+    async def loop(self, operation, seconds):
+        while True:
+            try:
+                await operation()
+            except Exception:
+                log.exception("Tarama hatası; döngü devam edecek")
+            await asyncio.sleep(seconds)
+
+    async def status_loop(self):
+        while True:
+            await asyncio.sleep(self.config.status_poll_seconds)
+            count = len(self.repo.watched())
+            log.info("STATUS | uptime=%s | watchlist=%s | bugün alarm=%s | API requests=%s | son başarılı=%s",
+                     datetime.now().astimezone()-self.started,count,self.repo.count_today_alerts(),dict(self.api.counts),self.api.last_success)
