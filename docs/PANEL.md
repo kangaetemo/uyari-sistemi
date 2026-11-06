@@ -7,12 +7,19 @@ Panel, botun SQLite veritabanını salt okunur açan küçük bir web sitesidir.
 | Sayfa | Ne gösterir |
 | --- | --- |
 | Genel bakış | Kural bazında kazanma oranı, başabaş oranı (1 / ortalama alarm oranı), teorik getiri; son 30 günün günlük alarmları; maç türüne (ATP, WTA, Challenger, ITF) göre kırılım |
+| Canlı alarmlar | Son 6/12/24/48 saatte alarm verilen maçlar: set skorları, oyun puanı, servis, takip edilen tarafın alarm oranı ve güncel oranı, kazandı/kaybetti. 5 saniyede bir kendini yeniler |
 | Alarmlar | Tüm alarmlar; kurala, döneme ve sonuca göre filtre |
 | Maç sayfası | Maç önü oran geçmişi, canlı oran grafiği, eşik ve referans çizgisi, alarm noktası, sonuç |
 | Aktif takip | Şu an izlenen maçlar ve 3. set takipleri, son canlı oranlar |
 | Eşik analizi | Kayıtlı geçmişle "eşik 1.80 / 2.20 / 3.00 olsaydı" sonuçları; referans oran aralığına göre filtre |
 
 Üst satırdaki "Bot: çalışıyor" bilgisi botun son canlı taramasından gelir. 5 dakikadan uzun süre tarama yoksa kırmızı görünür. `/health` adresi giriş istemeden aynı bilgiyi JSON olarak verir; dış bir izleme servisi bağlanabilir.
+
+## Canlı alarmlar ve API kullanımı
+
+Canlı alarmlar sekmesi ek API çağrısı yapmaz. Bot, zaten açık tuttuğu canlı skor WebSocket'inden gelen skoru yalnızca son 24 saatte alarm verilen maçlar için `live_scores` tablosuna yazar; güncel oran, botun 3 saniyede bir çektiği canlı oran sorgusundan gelir. WebSocket koptuğunda skor oran akışındaki durumdan (set sayısı ve oyun puanı) gösterilir, set skorları bağlantı gelince geri gelir.
+
+Maç bittiğinde WebSocket'in son skoru kazanan tarafı hemen gösterir ("ön sonuç"). Resmi sonuç, istatistiklere giren kayıt olarak, botun düzenli sonuç taramasında `match_results` tablosuna yazılır.
 
 ## Ayarlar
 

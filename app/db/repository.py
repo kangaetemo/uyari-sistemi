@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS match_results (
  event_key TEXT PRIMARY KEY REFERENCES matches(event_key), winner_side TEXT CHECK(winner_side IN ('Home','Away')),
  final_result TEXT, provider_status TEXT, outcome_type TEXT NOT NULL, recorded_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS live_scores (
+ event_key TEXT PRIMARY KEY, status TEXT, final_result TEXT, game_result TEXT, serve TEXT,
+ sets TEXT, winner TEXT, source TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 """
 
 
@@ -306,6 +310,23 @@ class Repository:
                 (key,watch["favorite_player_name"],previous["live_odds"] if previous else None,str(odd),str(threshold),stamp,side,watch["opening_odds"]))
             self.conn.execute("UPDATE third_set_watches SET status='ALERTED' WHERE event_key=? AND favorite_side=?", (key,side))
             return inserted.rowcount == 1
+
+    # --- Live score of alerted matches (for the panel) -------------------------
+
+    def recently_alerted(self, hours=24):
+        """Event keys alerted in the last `hours`; the bot stores their live score for the panel."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        return {row[0] for row in self.conn.execute("SELECT DISTINCT event_key FROM alerts WHERE created_at>=?", (cutoff,))}
+
+    def save_live_score(self, event_key, *, status, final_result, game_result, serve, sets, winner, source):
+        """`sets` is a JSON list of [set, first, second]; `source` is 'ws' (socket) or 'odds' (odds feed fallback)."""
+        with self.conn:
+            self.conn.execute("""INSERT INTO live_scores(event_key,status,final_result,game_result,serve,sets,winner,source,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO UPDATE SET status=excluded.status,
+                final_result=excluded.final_result,game_result=excluded.game_result,serve=excluded.serve,
+                sets=excluded.sets,winner=COALESCE(excluded.winner,live_scores.winner),
+                source=excluded.source,updated_at=excluded.updated_at""",
+                (event_key,status,final_result,game_result,serve,sets,winner,source,now()))
 
     # --- Results -------------------------------------------------------------
 

@@ -1,8 +1,10 @@
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
 
+from app.api.live_stream import is_final
 from app.core.parsers import parse_live_odds, parse_prematch_odds
 from app.core.results import parse_result
 from app.core.rules import eligible
@@ -43,6 +45,10 @@ class Monitor:
         self._scan_now = asyncio.Event()
         if stream is not None:
             stream.listeners.append(self._on_stream_update)
+            stream.listeners.append(self._store_alerted_scores)
+        self._alerted = set()      # Matches whose live score the panel shows; refreshed on every live scan.
+        self._last_score = {}
+        self._final_from_socket = set()  # The socket's final score is kept; the odds feed must not blank its sets.
         self.started = datetime.now().astimezone()
         self.clock = FeedClock()
         self._delivery_lock = asyncio.Lock()
@@ -99,6 +105,7 @@ class Monitor:
             return []
         live = parse_live_odds(payload)
         self._heartbeat(len(live))
+        self._alerted = self.repo.recently_alerted()
         seen = []
         alerted = False
         for key, match in watched.items():
@@ -124,7 +131,50 @@ class Monitor:
                 alerted = True
         if alerted:
             self._alerts_ready.set()  # Delivery runs in its own loop so Telegram never stalls polling.
+            self._alerted = self.repo.recently_alerted()
+        try:
+            self._scores_from_odds(live)
+        except Exception:
+            log.exception("Canlı skor kaydedilemedi")
         return seen
+
+    def _save_score(self, key, source, **score):
+        signature = tuple(score.values())
+        if self._last_score.get(key) == signature:
+            return
+        self._last_score[key] = signature
+        self.repo.save_live_score(key, source=source, **score)
+
+    def _store_alerted_scores(self, rows):
+        """Keep the panel's live score of alerted matches current; uses socket data only, no API call."""
+        for row in rows:
+            key = str(row["event_key"])
+            if key not in self._alerted:
+                continue
+            sets = sorted(([str(s.get("score_set")), str(s.get("score_first")), str(s.get("score_second"))]
+                           for s in row.get("scores") or [] if isinstance(s, dict) and s.get("score_set") is not None),
+                          key=lambda item: int(item[0]) if item[0].isdigit() else 99)
+            if is_final(row):
+                self._final_from_socket.add(key)
+            try:
+                self._save_score(key, "ws", status=str(row.get("event_status") or ""),
+                                 final_result=row.get("event_final_result"), game_result=row.get("event_game_result"),
+                                 serve=row.get("event_serve"), sets=json.dumps(sets) if sets else None,
+                                 winner=row.get("event_winner"))
+            except Exception:
+                log.exception("Canlı skor kaydedilemedi: event=%s", key)
+
+    def _scores_from_odds(self, live):
+        """Without socket data for an alerted match, show the odds feed's status and set score instead."""
+        for key in set(self._last_score) - self._alerted:
+            self._last_score.pop(key, None)
+            self._final_from_socket.discard(key)
+        socket = self.stream.matches if self.stream_ready() else {}
+        for key in self._alerted - socket.keys() - self._final_from_socket:
+            item = live.get(key)
+            if item is not None:
+                self._save_score(key, "odds", status=item.status, final_result=item.score,
+                                 game_result=item.game_score, serve=None, sets=None, winner=None)
 
     def stream_ready(self):
         """Use WebSocket scores only while the socket is connected; otherwise fall back to get_livescore."""
