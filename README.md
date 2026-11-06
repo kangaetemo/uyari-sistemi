@@ -12,6 +12,14 @@ Başlangıç, `get_livescore` yanıtındaki `Set 3`, üçüncü set oyunlarını
 
 Mevcut SQLite kayıtları korunarak alarm tablosu otomatik güncellenir. Eski şemadan ilk geçişte `data/*before-third-set-*.db` yedeği oluşturulur. Yeni başlangıçlar, takip geçmişi ve alarm durumları SQLite'da saklanır; yeniden başlatmak aynı alarmı tekrar oluşturmaz.
 
+## Set için servis alarmı
+
+Maç önü favori oranı `SERVE_FOR_SET_FAVORITE_MAX` (varsayılan 1.35) veya altında olan oyuncu herhangi bir sette **bir break geride** kalır ve rakip **set için servis eder** ise (favori açısından 3-5, 4-5 veya 5-6, servis rakipte) Telegram alarmı gider. Servis sırası dönüşümlü olduğundan önde olan oyuncu 5-3, 5-4 veya 6-5'te servis ediyorsa tam bir break öndedir; favori bu oyunu kırmazsa seti kaybeder. Her sette en fazla bir alarm üretilir; aynı maçın başka bir setinde aynı durum yeniden alarm verir. ITF dahil bütün maçlara uygulanır.
+
+Skor, oyun ve o an servis atan oyuncu WebSocket'ten okunur, ek API çağrısı yapılmaz. `event_serve` bir oyun bittikten hemen sonra bir süre eski servisçiyi gösterebildiği için servis atan oyuncu `pointbypoint` listesindeki son oyunla doğrulanır; `pointbypoint` yoksa yeni oyunun ilk sayısı oynandıktan sonra karar verilir. Alarm mesajı set skorunu, oyun içi puanı, maç önü oranı ve favorinin o anki canlı `To Win` oranını içerir. Favorinin canlı oranı yoksa (askıda) bir sonraki taramada tekrar denenir. Bot maç başlamadan önce oranını görmediği maçlarda favoriyi bilemez; bu maçlar atlanır.
+
+Alarmdan sonra bot sonucu da kaydeder: favori o oyunu kırdı mı (**break yaptı** / **rakip servisini aldı**), seti aldı mı ve maçı kazandı mı. Panelin genel bakış sayfasında bu kuralın kendi kartı ile break ve set kazanma oranları görünür. `SERVE_FOR_SET_ENABLED=false` kuralı kapatır. İlk açılışta alarm tablosu set numarası için güncellenir ve önce `data/*before-serve-for-set-*.db` yedeği alınır.
+
 ## Canlı skor WebSocket'i
 
 `WEBSOCKET_ENABLED=true` (varsayılan) iken bot API-Tennis'in canlı skor WebSocket'ine bağlanır. Her sayıda gelen skorla üçüncü setin 0–0 başladığı an anında görülür ve bot bir sonraki taramayı beklemeden o anın oranını çeker; `get_livescore` sorgusu kullanılmaz. WebSocket oran göndermez, oranlar `get_live_odds` ile `LIVE_POLL_SECONDS` (3) saniyede bir çekilmeye devam eder. Bağlantı koparsa bot 1–60 saniye aralıklarla yeniden bağlanır ve bu sırada `get_livescore` ile çalışır. Bağlantıyı denemek için:

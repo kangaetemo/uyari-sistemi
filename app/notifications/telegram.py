@@ -38,6 +38,8 @@ def format_alert(alert, timezone):
     from datetime import datetime
     clean = lambda value: html.escape(str(value or "Bilinmiyor"))
     local_time = datetime.fromisoformat(alert["created_at"]).astimezone(timezone).strftime("%H:%M:%S")
+    if "rule_type" in alert.keys() and alert["rule_type"] == "SERVE_FOR_SET":
+        return format_serve_for_set(alert, clean, local_time)
     third_set = "rule_type" in alert.keys() and alert["rule_type"] == "THIRD_SET"
     reference = (f"📉 3. set başlangıcı: {clean(alert['reference_odds'])}\n" if third_set
                  else f"📉 Maç önü: {clean(alert['prematch_odds'])}\n")
@@ -51,4 +53,24 @@ def format_alert(alert, timezone):
             f"{reference}"
             f"📈 Canlı oran: {clean(alert['trigger_live_odds'])}\n"
             f"🎯 Alarm seviyesi: {'>' if third_set else '≥'} {clean(alert['threshold'])}\n"
+            f"⏱ {local_time}\n🆔 Event: {clean(alert['event_key'])}")
+
+
+def format_serve_for_set(alert, clean, local_time):
+    favorite_home = alert["favorite_side"] == "Home"
+    opponent = alert["second_player_name"] if favorite_home else alert["first_player_name"]
+    keys = alert.keys()
+    games = (f"{alert['favorite_games']}-{alert['opponent_games']}"
+             if "favorite_games" in keys and alert["favorite_games"] is not None else "?")
+    points = alert["game_result"] if "game_result" in keys and alert["game_result"] not in (None, "", "-") else None
+    return ("🚨 <b>SET İÇİN SERVİS ALARMI</b>\n\n"
+            "📋 Kural: maç önü favorisi break geride, rakip set için servis ediyor\n"
+            f"🎾 {clean(alert['first_player_name'])} vs {clean(alert['second_player_name'])}\n"
+            f"🏆 {clean(alert['tournament_name'])}\n\n"
+            f"⭐ Favori: {clean(alert['favorite_player_name'])}\n"
+            f"🔢 {clean(alert['set_number'])}. set: {clean(games)} geride | servis: {clean(opponent)}"
+            f"{f' | oyun: {clean(points)}' if points else ''}\n"
+            "🎯 Seti kurtarmak için bu oyunu kırmalı\n"
+            f"📉 Maç önü: {clean(alert['prematch_odds'])}\n"
+            f"📈 Canlı oran: {clean(alert['trigger_live_odds'])}\n"
             f"⏱ {local_time}\n🆔 Event: {clean(alert['event_key'])}")

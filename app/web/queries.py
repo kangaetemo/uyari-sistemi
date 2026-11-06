@@ -7,9 +7,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from app.api.live_stream import is_final
-from app.core.results import alert_outcome, build_report, parse_result
+from app.core.results import RULES, alert_outcome, build_report, parse_result
 
-RULES = ("PREMATCH", "THIRD_SET")
+ANALYSIS_RULES = ("PREMATCH", "THIRD_SET")  # Rules with an odds threshold to replay.
 PREMATCH_THRESHOLDS = [Decimal(x) for x in ("1.60", "1.70", "1.80", "1.90", "2.00", "2.10", "2.20", "2.40", "2.60", "2.80", "3.00")]
 THIRD_SET_THRESHOLDS = [Decimal(x) for x in ("1.70", "1.80", "1.90", "2.00", "2.10", "2.20", "2.40", "2.60", "2.80", "3.00")]
 
@@ -41,7 +41,13 @@ def alerts(conn, days, cutoff=None):
         result_cols, join = "r.winner_side,r.final_result,r.outcome_type", "LEFT JOIN match_results r USING(event_key)"
     else:
         result_cols, join = "NULL AS winner_side,NULL AS final_result,NULL AS outcome_type", ""
-    return conn.execute(f"""SELECT a.*,m.first_player_name,m.second_player_name,m.tournament_name,{event_type},{result_cols}
+    if has_table(conn, "serve_for_set") and has_column(conn, "alerts", "set_number"):
+        serve_cols = "s.favorite_games,s.opponent_games,s.game_outcome,s.set_outcome"
+        join += (" LEFT JOIN serve_for_set s ON a.rule_type='SERVE_FOR_SET'"
+                 " AND s.event_key=a.event_key AND s.set_number=a.set_number")
+    else:
+        serve_cols = "NULL AS favorite_games,NULL AS opponent_games,NULL AS game_outcome,NULL AS set_outcome"
+    return conn.execute(f"""SELECT a.*,m.first_player_name,m.second_player_name,m.tournament_name,{event_type},{result_cols},{serve_cols}
         FROM alerts a JOIN matches m USING(event_key) {join}
         WHERE a.created_at>=? ORDER BY a.created_at DESC""", ((cutoff or since(days)).isoformat(),)).fetchall()
 
@@ -72,7 +78,22 @@ def overview(conn, days):
         by_type[row["event_type"] or "Bilinmiyor"].append(row)
     types = sorted(((name, summarize(build_report(items))["ALL"]) for name, items in by_type.items()),
                    key=lambda pair: -pair[1]["total"])
-    return {"rows": rows, "by_rule": by_rule, "by_type": types}
+    return {"rows": rows, "by_rule": by_rule, "by_type": types, "serve": serve_for_set_stats(rows)}
+
+
+def serve_for_set_stats(rows):
+    """How often the favourite broke back and won the set after a serving-for-set alert."""
+    items = [row for row in rows if row["rule_type"] == "SERVE_FOR_SET"]
+    if not items:
+        return None
+    broke = sum(row["game_outcome"] == "BROKE" for row in items)
+    game_known = sum(row["game_outcome"] is not None for row in items)
+    set_won = sum(row["set_outcome"] == "WON" for row in items)
+    set_known = sum(row["set_outcome"] is not None for row in items)
+    return {"total": len(items), "broke": broke, "game_known": game_known,
+            "broke_rate": broke / game_known * 100 if game_known else None,
+            "set_won": set_won, "set_known": set_known,
+            "set_rate": set_won / set_known * 100 if set_known else None}
 
 
 def daily_counts(rows, tz, days=30):
@@ -100,6 +121,8 @@ def match_detail(conn, event_key):
         "live": conn.execute("SELECT * FROM live_odds_history WHERE event_key=? ORDER BY id", (event_key,)).fetchall(),
         "third_watches": conn.execute("SELECT * FROM third_set_watches WHERE event_key=?", (event_key,)).fetchall(),
         "third": conn.execute("SELECT * FROM third_set_odds_history WHERE event_key=? ORDER BY id", (event_key,)).fetchall(),
+        "serve": {row["set_number"]: row for row in conn.execute(
+            "SELECT * FROM serve_for_set WHERE event_key=?", (event_key,))} if has_table(conn, "serve_for_set") else {},
     }
 
 

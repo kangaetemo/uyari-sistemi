@@ -7,7 +7,7 @@
 </div>
 <div class="filters">
 <a href="/alerts?days={{ days }}&result={{ result }}" class="{{ 'on' if not rule }}">Tüm kurallar</a>
-{% for r in ['PREMATCH','THIRD_SET'] %}<a href="/alerts?days={{ days }}&rule={{ r }}&result={{ result }}" class="{{ 'on' if rule==r }}">{{ rule_names[r] }}</a>{% endfor %}
+{% for r in rules %}<a href="/alerts?days={{ days }}&rule={{ r }}&result={{ result }}" class="{{ 'on' if rule==r }}">{{ rule_names[r] }}</a>{% endfor %}
 <a href="/alerts?days={{ days }}&rule={{ rule }}" class="{{ 'on' if not result }}">Tüm sonuçlar</a>
 {% for k, label in outcome_names.items() %}<a href="/alerts?days={{ days }}&rule={{ rule }}&result={{ k }}" class="{{ 'on' if result==k }}">{{ label }}</a>{% endfor %}
 </div>
@@ -16,7 +16,7 @@
 {% for a in rows %}{% set o = outcome(a) %}
 <tr>
 <td>{{ local(a.created_at) }}</td>
-<td>{{ rule_names[a.rule_type] }}</td>
+<td>{{ rule_names.get(a.rule_type, a.rule_type) }}{% if a.rule_type == 'SERVE_FOR_SET' %}<br><span class="note">{{ a.set_number }}. set{% if a.favorite_games is not none %} {{ a.favorite_games }}-{{ a.opponent_games }}{% endif %}{% if a.game_outcome %} · {{ game_outcomes[a.game_outcome] }}{% endif %}{% if a.set_outcome %} · {{ set_outcomes[a.set_outcome] }}{% endif %}</span>{% endif %}</td>
 <td><a href="/match/{{ a.event_key }}">{{ a.first_player_name or '?' }} – {{ a.second_player_name or '?' }}</a><br><span class="note">{{ a.tournament_name or '' }}</span></td>
 <td>{{ a.favorite_player_name or a.favorite_side }}</td>
 <td>{{ a.event_type or '-' }}</td>
