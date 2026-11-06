@@ -7,10 +7,23 @@
 <div class="card">Bu dönemde alarm yok.</div>
 {% else %}
 <div class="cards">
-{% for rule in ['PREMATCH','THIRD_SET'] if rule in data.by_rule %}
+{% for rule in rules if rule in data.by_rule %}
 {% with title=rule_names[rule], s=data.by_rule[rule] %}{% include "_stats_card.html" %}{% endwith %}
 {% endfor %}
 {% with title="Toplam", s=data.by_rule['ALL'] %}{% include "_stats_card.html" %}{% endwith %}
+{% if data.serve %}{% set v = data.serve %}
+<div class="card">
+<h3>Set için servis: sonrası</h3>
+<div class="big">{{ pct(v.broke_rate) }}</div>
+<div class="note">favorinin o oyunu kırma oranı, {{ v.game_known }} sonuçlanmış alarm</div>
+<div class="kv">
+<span>Alarm</span><span>{{ v.total }}</span>
+<span>Break yaptı</span><span>{{ v.broke }} / {{ v.game_known }}</span>
+<span>Seti aldı</span><span>{{ v.set_won }} / {{ v.set_known }} ({{ pct(v.set_rate) }})</span>
+</div>
+<div class="note">Maçı kazanma oranı "Set için servis" kartındadır.</div>
+</div>
+{% endif %}
 </div>
 {% endif %}
 

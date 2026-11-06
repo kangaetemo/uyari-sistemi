@@ -8,6 +8,7 @@ from app.api.live_stream import is_final
 from app.core.parsers import parse_live_odds, parse_prematch_odds
 from app.core.results import parse_result
 from app.core.rules import eligible
+from app.core.serve_for_set import process_serve_for_set, serving_for_set, track_outcomes
 from app.core.third_set import FeedClock, is_third_set, opening_score, process_third_set
 from app.notifications.telegram import format_alert
 
@@ -43,9 +44,14 @@ class Monitor:
         self.config, self.api, self.repo, self.telegram = config, api, repository, telegram
         self.stream = stream
         self._scan_now = asyncio.Event()
+        # Config objects built before this rule existed have no such field; the rule stays off there.
+        self.serve_for_set_enabled = getattr(config, "serve_for_set_enabled", False)
+        self._serve_open = repository.serve_for_set_open_keys() if self.serve_for_set_enabled else set()
         if stream is not None:
             stream.listeners.append(self._on_stream_update)
             stream.listeners.append(self._store_alerted_scores)
+            if self.serve_for_set_enabled:
+                stream.listeners.append(self._on_serve_for_set_stream)
         self._alerted = set()      # Matches whose live score the panel shows; refreshed on every live scan.
         self._last_score = {}
         self._final_from_socket = set()  # The socket's final score is kept; the odds feed must not blank its sets.
@@ -61,6 +67,7 @@ class Monitor:
                                             result.provider_status, result.outcome_type):
             log.info("SONUÇ | event=%s | %s | kazanan=%s | %s", key, result.outcome_type,
                      result.winner_side or "-", result.final_result or "-")
+            self.repo.settle_serve_for_set(key, result.winner_side, result.final_result, result.outcome_type)
 
     async def prematch_scan(self):
         local_date = datetime.now(self.config.timezone).date()
@@ -98,7 +105,7 @@ class Monitor:
     async def live_scan(self):
         watched = self.repo.watched()
         third_set_enabled = self.config.third_set_enabled
-        if not watched and not third_set_enabled:
+        if not watched and not third_set_enabled and not self.serve_for_set_enabled:
             return []
         payload = await self.api.live_odds()
         if not payload:
@@ -129,6 +136,12 @@ class Monitor:
             scores = self.stream.matches if self.stream_ready() else None
             if await process_third_set(self.config,self.api,self.repo,live,clock=self.clock,scores=scores):
                 alerted = True
+        if self.serve_for_set_enabled:
+            try:
+                if await self._serve_for_set(live):
+                    alerted = True
+            except Exception:
+                log.exception("Set için servis kuralı çalıştırılamadı")
         if alerted:
             self._alerts_ready.set()  # Delivery runs in its own loop so Telegram never stalls polling.
             self._alerted = self.repo.recently_alerted()
@@ -137,6 +150,32 @@ class Monitor:
         except Exception:
             log.exception("Canlı skor kaydedilemedi")
         return seen
+
+    async def _serve_for_set(self, live):
+        self._serve_open = self.repo.serve_for_set_open_keys()
+        scores = self.stream.matches if self.stream_ready() else None
+        created = await process_serve_for_set(self.config, self.api, self.repo, live,
+                                              scores=scores, open_keys=self._serve_open)
+        if created:
+            self._serve_open = self.repo.serve_for_set_open_keys()
+        return created
+
+    def _on_serve_for_set_stream(self, rows):
+        """Follow the outcome of earlier alerts, and scan now when a favourite falls to serving-for-set."""
+        if self._serve_open:
+            track_outcomes(self.repo, rows, self._serve_open)
+        for row in rows:
+            point = serving_for_set(row)
+            if point is None:
+                continue
+            key = str(row["event_key"])
+            if self.repo.serve_for_set_alerted(key, point.set_number):
+                continue
+            favorite = self.repo.serve_for_set_favorites([key], self.config.serve_for_set_favorite_max).get(key)
+            if favorite is not None and favorite["favorite_side"] != point.server:
+                log.info("SET İÇİN SERVİS | event=%s | WebSocket: rakip set için servis ediyor; hemen taranıyor", key)
+                self._scan_now.set()
+                return
 
     def _save_score(self, key, source, **score):
         signature = tuple(score.values())
@@ -271,7 +310,7 @@ class Monitor:
                      item.away if item.away is not None else "yok", item.home_updated_at or "yok")
 
     async def scheduled_live_scan(self):
-        if self.config.third_set_enabled:
+        if self.config.third_set_enabled or self.serve_for_set_enabled:
             await self.live_scan()
             return
         watched = self.repo.watched()
