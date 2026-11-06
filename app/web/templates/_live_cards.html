@@ -1,0 +1,39 @@
+{% macro games(value) -%}
+{%- set text = value|string -%}
+{%- if '.' in text %}{{ text.split('.')[0] }}<sup>{{ text.split('.')[1] }}</sup>{% else %}{{ text }}{% endif -%}
+{%- endmacro %}
+<p class="note refresh">{{ counts['live'] }} canlı · {{ counts['final'] }} bitti
+{%- if counts['WON'] or counts['LOST'] %} ({{ counts['WON'] }} kazandı, {{ counts['LOST'] }} kaybetti){% endif %}
+· güncellendi {{ local(now_iso, '%H:%M:%S') }}</p>
+<div class="live-grid">
+{% for a in rows %}
+{% set s = a.score %}
+<div class="live-card {{ 'done' if a.final }}">
+  <div class="live-head">
+    <span>{{ rule_names[a.rule_type] }} · {{ a.tournament_name or '' }}</span>
+    {% if a.final %}<span class="st">{{ match_status(s.status) if s else 'Bitti' }}</span>
+    {% elif s %}{% set age = ago(s.updated_at) %}<span class="st on">{{ match_status(s.status) }}{% if age and age > 600 %} <span class="warn">· {{ age // 60 }} dk veri yok</span>{% endif %}</span>
+    {% else %}<span class="st">Skor bekleniyor</span>{% endif %}
+  </div>
+  <table class="board">
+  {% for side, name, col in [('Home', a.first_player_name, 1), ('Away', a.second_player_name, 2)] %}
+    <tr class="{{ 'fav' if a.favorite_side == side }}">
+      <td class="p">{{ name or '?' }}{% if s and not a.final and serving(s.serve, side) %}<span class="srv" title="Servis"></span>{% endif %}</td>
+      {% for item in a.sets %}<td class="g">{{ games(item[col]) }}</td>{% endfor %}
+      {% if not a.sets and s and s.final_result and ' - ' in s.final_result %}<td class="g">{{ s.final_result.split(' - ')[col - 1] }}</td>{% endif %}
+      <td class="pt">{% if not a.final and a.points[col - 1] is not none %}{{ a.points[col - 1] }}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </table>
+  <div class="live-foot">
+    <span>Alarm {{ local(a.created_at, '%H:%M') }}: <b>{{ a.trigger_live_odds }}</b></span>
+    <span>{{ "Son oran" if a.final else "Şimdi" }}: <b>{{ a.current_odds or '-' }}</b>{% if a.current_odds and not a.final %} <span class="note">({{ local(a.current_at, '%H:%M:%S') }})</span>{% endif %}</span>
+    {% if a.final or a.outcome != 'PENDING' %}<span class="badge {{ a.outcome }}">{{ outcome_names[a.outcome] }}</span>{% if a.provisional %} <span class="note" title="Maç bitti; resmi sonuç bir sonraki sonuç taramasında kaydedilir">ön sonuç</span>{% endif %}{% endif %}
+    <a href="/match/{{ a.event_key }}">grafik</a>
+  </div>
+  {% if s and not a.sets and not a.final %}<div class="note">Set skoru WebSocket bağlanınca görünür; şu an oran akışındaki set sayısı gösteriliyor.</div>{% endif %}
+</div>
+{% else %}
+<p class="note">Bu dönemde alarm yok.</p>
+{% endfor %}
+</div>

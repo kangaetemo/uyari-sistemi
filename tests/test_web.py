@@ -49,7 +49,7 @@ def test_login_is_required(client):
 
 
 @pytest.mark.parametrize("path", ["/", "/?days=0", "/alerts", "/alerts?rule=PREMATCH&result=WON", "/active",
-                                  "/match/1", "/analysis", "/analysis?rule=THIRD_SET", "/analysis?pmin=1.1&pmax=abc"])
+                                  "/match/1", "/live", "/analysis", "/analysis?rule=THIRD_SET", "/analysis?pmin=1.1&pmax=abc"])
 def test_pages_render(client, path):
     response = client.get(path, auth=AUTH)
     assert response.status_code == 200, response.text

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Canlı alarmlar</h1>
+<p class="sub">Alarm verilen maçların canlı skoru ve takip edilen tarafın güncel oranı. Sayfa 5 saniyede bir kendini yeniler; ek API çağrısı yapılmaz.</p>
+<div class="filters">
+{% for h, label in live_periods %}<a href="/live?hours={{ h }}" class="{{ 'on' if hours==h }}">{{ label }}</a>{% endfor %}
+</div>
+<div id="live" data-hours="{{ hours }}">{% include "_live_cards.html" %}</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var box = document.getElementById("live");
+  var url = "/live?partial=1&hours=" + encodeURIComponent(box.dataset.hours);
+  var busy = false;
+  function refresh() {
+    if (busy || document.hidden) return;
+    busy = true;
+    fetch(url, {credentials: "same-origin", cache: "no-store"})
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (html) { box.innerHTML = html; })
+      .catch(function () {
+        var note = box.querySelector(".refresh");
+        if (note) note.textContent = "Yenilenemedi, tekrar denenecek";
+      })
+      .finally(function () { busy = false; });
+  }
+  setInterval(refresh, 5000);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
+})();
+</script>
+{% endblock %}

@@ -20,6 +20,26 @@ STATUS_NAMES = {"PREMATCH_ELIGIBLE": "Maç önü, uygun", "PREMATCH_INELIGIBLE":
                 "ALERTED": "Alarm verildi", "FINISHED": "Bitti", "CANCELLED": "İptal", "EXPIRED": "Süresi doldu",
                 "WATCHING": "İzleniyor", "CLOSED": "Kapandı", "ALERTED_CLOSED": "Alarm verildi, kapandı"}
 PERIODS = [(1, "24 saat"), (7, "7 gün"), (30, "30 gün"), (0, "Tümü")]
+LIVE_PERIODS = [(6, "6 saat"), (12, "12 saat"), (24, "24 saat"), (48, "48 saat")]
+FINAL_STATUS_NAMES = (("retired", "Çekilme"), ("walk", "Walkover"), ("cancel", "İptal"), ("abandon", "Yarıda kaldı"),
+                      ("finish", "Bitti"), ("ended", "Bitti"))
+
+
+def match_status(value):
+    """Provider status in Turkish: 'Set 2' -> '2. set', 'Finished' -> 'Bitti'."""
+    text = str(value or "").strip()
+    lowered = text.lower()
+    if lowered.startswith("set ") and lowered[4:].isdigit():
+        return f"{lowered[4:]}. set"
+    for word, name in FINAL_STATUS_NAMES:
+        if word in lowered:
+            return name
+    return text or "-"
+
+
+def serving(serve, side):
+    value = str(serve or "").lower()
+    return (side == "Home" and value.startswith("first")) or (side == "Away" and value.startswith("second"))
 
 
 def create_app(database_path: Path, username: str, password: str, tz):
@@ -62,7 +82,8 @@ def create_app(database_path: Path, username: str, password: str, tz):
 
     templates.env.globals.update(local=local, ago=ago, pct=pct, num=num, signed=signed, rule_names=RULE_NAMES,
                                  outcome_names=OUTCOME_NAMES, status_names=STATUS_NAMES, periods=PERIODS,
-                                 outcome=alert_outcome)
+                                 outcome=alert_outcome, match_status=match_status, serving=serving,
+                                 live_periods=LIVE_PERIODS)
 
     def render(request, name, **context):
         conn = context.pop("_conn", None)
@@ -145,6 +166,17 @@ def create_app(database_path: Path, username: str, password: str, tz):
         try:
             matches, third = queries.active(conn)
             return render(request, "active.html", _conn=conn, matches=matches, third=third, page="active")
+        finally:
+            conn.close()
+
+    @app.get("/live", response_class=HTMLResponse, dependencies=[Depends(require_login)])
+    def live(request: Request, hours: int = Query(24, ge=1, le=168), partial: bool = False):
+        conn = open_db()
+        try:
+            rows, counts = queries.live_alerts(conn, hours)
+            name = "_live_cards.html" if partial else "live.html"
+            return render(request, name, _conn=conn, rows=rows, counts=counts, hours=hours, page="live",
+                          now_iso=datetime.now(timezone.utc).isoformat())
         finally:
             conn.close()
 

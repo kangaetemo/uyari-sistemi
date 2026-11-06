@@ -1,11 +1,13 @@
 """Read-only queries for the panel. The panel never calls the odds API; it only reads what the bot stored."""
+import json
 import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from app.core.results import alert_outcome, build_report
+from app.api.live_stream import is_final
+from app.core.results import alert_outcome, build_report, parse_result
 
 RULES = ("PREMATCH", "THIRD_SET")
 PREMATCH_THRESHOLDS = [Decimal(x) for x in ("1.60", "1.70", "1.80", "1.90", "2.00", "2.10", "2.20", "2.40", "2.60", "2.80", "3.00")]
@@ -32,7 +34,7 @@ def has_column(conn, table, column):
     return any(row["name"] == column for row in conn.execute(f"PRAGMA table_info({table})"))
 
 
-def alerts(conn, days):
+def alerts(conn, days, cutoff=None):
     """Alerts with their match and settled result (columns missing in older databases come back NULL)."""
     event_type = "m.event_type" if has_column(conn, "matches", "event_type") else "NULL AS event_type"
     if has_table(conn, "match_results"):
@@ -41,7 +43,7 @@ def alerts(conn, days):
         result_cols, join = "NULL AS winner_side,NULL AS final_result,NULL AS outcome_type", ""
     return conn.execute(f"""SELECT a.*,m.first_player_name,m.second_player_name,m.tournament_name,{event_type},{result_cols}
         FROM alerts a JOIN matches m USING(event_key) {join}
-        WHERE a.created_at>=? ORDER BY a.created_at DESC""", (since(days).isoformat(),)).fetchall()
+        WHERE a.created_at>=? ORDER BY a.created_at DESC""", ((cutoff or since(days)).isoformat(),)).fetchall()
 
 
 def summarize(stats):
@@ -111,6 +113,64 @@ def active(conn):
         FROM third_set_watches w JOIN matches m USING(event_key) WHERE w.status IN ('WATCHING','ALERTED')
         ORDER BY w.observed_at DESC""").fetchall()
     return matches, third
+
+
+def _score_lines(score):
+    """Per-player rows of set games for the scoreboard, plus the game score split per player."""
+    sets = []
+    if score and score["sets"]:
+        try:
+            sets = [item for item in json.loads(score["sets"]) if isinstance(item, list) and len(item) == 3]
+        except ValueError:
+            sets = []
+    points = [None, None]
+    game = (score["game_result"] or "").strip() if score else ""
+    if "-" in game and game != "-":
+        points = [part.strip() for part in game.split("-", 1)]
+    return sets, points
+
+
+def live_alerts(conn, hours):
+    """Alerts of the last `hours` with the bot's stored live score and the followed side's latest price.
+
+    Nothing here calls the API: the bot writes the score from the WebSocket it already
+    keeps open, and the prices come from the odds it already polls.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    scores = has_table(conn, "live_scores")
+    out = []
+    for row in alerts(conn, 0, cutoff):
+        item = dict(row)
+        score = conn.execute("SELECT * FROM live_scores WHERE event_key=?", (row["event_key"],)).fetchone() if scores else None
+        if row["rule_type"] == "THIRD_SET":
+            latest = conn.execute("""SELECT live_odds,observed_at FROM third_set_odds_history
+                WHERE event_key=? AND favorite_side=? ORDER BY id DESC LIMIT 1""", (row["event_key"], row["favorite_side"])).fetchone()
+        else:
+            latest = conn.execute("SELECT live_odds,observed_at FROM live_odds_history WHERE event_key=? ORDER BY id DESC LIMIT 1",
+                                  (row["event_key"],)).fetchone()
+        outcome = alert_outcome(row)
+        provisional = False
+        final = bool(score and is_final({"event_status": score["status"]}))
+        if outcome == "PENDING" and final:
+            # The socket's final score settles it now; the official result follows with the next result scan.
+            result = parse_result({"event_status": score["status"], "event_final_result": score["final_result"],
+                                   "event_winner": score["winner"]})
+            if result is not None:
+                outcome = "VOID" if result.outcome_type in {"CANCELLED", "WALKOVER"} or result.winner_side is None else \
+                    "WON" if result.winner_side == row["favorite_side"] else "LOST"
+                provisional = True
+        sets, points = _score_lines(score)
+        item.update(score=score, sets=sets, points=points, final=final or row["outcome_type"] is not None,
+                    outcome=outcome, provisional=provisional,
+                    current_odds=latest["live_odds"] if latest else None,
+                    current_at=latest["observed_at"] if latest else None)
+        out.append(item)
+    out.sort(key=lambda item: (item["final"], -datetime.fromisoformat(item["created_at"]).timestamp()))
+    counts = defaultdict(int)
+    for item in out:
+        counts["final" if item["final"] else "live"] += 1
+        counts[item["outcome"]] += 1
+    return out, counts
 
 
 def bot_state(conn):
