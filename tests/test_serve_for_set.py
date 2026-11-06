@@ -273,3 +273,28 @@ def test_socket_wakes_the_live_loop_only_for_a_favorite(tmp_path):
     stream.handle(json.dumps(fixture((4, 5))))
     assert monitor._scan_now.is_set()
     repo.close()
+
+
+def test_match_missing_from_socket_is_judged_from_livescore(tmp_path):
+    repo = Repository(tmp_path / "a.db")
+    favorite_match(repo)
+    stream = connected_stream({"event_key": "99", "event_status": "Set 1"})  # Connected, but without match 77.
+    api = FakeAPI(fixture=fixture((4, 5)), payload=live_payload(home="2.60", status="Set 2"))
+    monitor = Monitor(CONFIG_ON, api, repo, None, stream)
+    asyncio.run(monitor.live_scan())
+    assert api.score_calls == 1 and [r["set_number"] for r in serve_alerts(repo)] == [2]
+    # Its outcome is followed from get_livescore as well.
+    api.fixture = fixture((5, 5), serve="First Player")
+    asyncio.run(monitor.live_scan())
+    row = repo.conn.execute("SELECT game_outcome,set_outcome FROM serve_for_set").fetchone()
+    assert tuple(row) == ("BROKE", None)
+    repo.close()
+
+
+def test_no_livescore_call_without_a_favorite_missing_from_socket(tmp_path):
+    repo = Repository(tmp_path / "a.db")
+    favorite_match(repo, home="1.50", away="2.60")  # Not a heavy favourite.
+    api = FakeAPI(fixture=fixture((4, 5)), payload=live_payload(home="2.60", status="Set 2"))
+    asyncio.run(Monitor(CONFIG_ON, api, repo, None, connected_stream()).live_scan())
+    assert api.score_calls == 0 and serve_alerts(repo) == []
+    repo.close()

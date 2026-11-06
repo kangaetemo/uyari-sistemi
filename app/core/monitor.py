@@ -142,7 +142,7 @@ class Monitor:
                 alerted = True
         if self.serve_for_set_enabled:
             try:
-                if await self._serve_for_set(live):
+                if await self._serve_for_set(live, scores):
                     alerted = True
             except Exception:
                 log.exception("Set için servis kuralı çalıştırılamadı")
@@ -159,13 +159,19 @@ class Monitor:
         """Score per live event: the socket's, plus one get_livescore call for live events it lacks.
 
         The socket does not carry every match the odds feed has. A third-set candidate
-        missing from it could never be judged, and an alerted match would show no set
-        score, so those two trigger the call; nothing else does. Alerted matches alone
-        reuse a result up to LIVESCORE_REUSE_SECONDS old to keep the call count low.
+        or a serving-for-set candidate (a live heavy favourite, or an alert whose set
+        outcome is still open) missing from it could never be judged, and an alerted
+        match would show no set score, so those trigger the call; nothing else does.
+        Alerted matches alone reuse a result up to LIVESCORE_REUSE_SECONDS old to keep
+        the call count low.
         """
         socket = socket if socket is not None else {}
         candidates = [key for key, item in live.items() if key not in socket and self.config.third_set_enabled
                       and is_third_set(item.status) and not self.repo.third_set_decided(key)]
+        if self.serve_for_set_enabled:
+            missing = [key for key in live if key not in socket]
+            favorites = self.repo.serve_for_set_favorites(missing, self.config.serve_for_set_favorite_max)
+            candidates += [key for key in missing if key in favorites or key in self._serve_open]
         alerted = [key for key in self._alerted if key in live and key not in socket and key not in self._final_scores]
         self._stream_coverage(live, socket)
         if not candidates and not alerted:
@@ -195,9 +201,9 @@ class Monitor:
                     game_result=row.get("event_game_result"), serve=row.get("event_serve"),
                     sets=json.dumps(sets) if sets else None, winner=row.get("event_winner"))
 
-    async def _serve_for_set(self, live):
+    async def _serve_for_set(self, live, scores):
+        """`scores` is the socket's fixtures plus get_livescore's for the candidates the socket lacks."""
         self._serve_open = self.repo.serve_for_set_open_keys()
-        scores = self.stream.matches if self.stream_ready() else None
         created = await process_serve_for_set(self.config, self.api, self.repo, live,
                                               scores=scores, open_keys=self._serve_open)
         if created:
