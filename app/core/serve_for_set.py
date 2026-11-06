@@ -168,8 +168,7 @@ async def process_serve_for_set(config, api, repo, live, *, scores=None, open_ke
     favorites = repo.serve_for_set_favorites(live.keys(), config.serve_for_set_favorite_max)
     if not favorites and not open_keys:
         return 0
-    from_rest = scores is None
-    fixtures = await livescore_fixtures(api) if from_rest else scores
+    fixtures = await livescore_fixtures(api) if scores is None else scores
     created = 0
     for key, match in favorites.items():
         fixture = fixtures.get(key)
@@ -188,7 +187,7 @@ async def process_serve_for_set(config, api, repo, live, *, scores=None, open_ke
             log.warning("SET İÇİN SERVİS ALARMI | event=%s | %s | set=%s | %s-%s geride | maç önü=%s | canlı=%s",
                         key, match["favorite_player_name"], point.set_number, point.receiver_games,
                         point.server_games, match["latest_prematch_odds"], odd)
-    if from_rest:
-        # Without the socket nothing else follows the score of earlier alerts.
-        track_outcomes(repo, fixtures.values(), open_keys)
+    # The socket listener follows matches it carries; this covers the ones only get_livescore has.
+    # Running both on a match is harmless: an unchanged outcome is not written again.
+    track_outcomes(repo, fixtures.values(), open_keys)
     return created
