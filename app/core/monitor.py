@@ -14,6 +14,7 @@ from app.notifications.telegram import format_alert
 log = logging.getLogger(__name__)
 RESULT_LOOKBACK_DAYS = 7
 HEARTBEAT_SECONDS = 30
+LIVESCORE_REUSE_SECONDS = 10
 
 
 def event_state(fixture):
@@ -48,7 +49,9 @@ class Monitor:
             stream.listeners.append(self._store_alerted_scores)
         self._alerted = set()      # Matches whose live score the panel shows; refreshed on every live scan.
         self._last_score = {}
-        self._final_from_socket = set()  # The socket's final score is kept; the odds feed must not blank its sets.
+        self._final_scores = set()  # A final score is kept; the odds feed must not blank its sets.
+        self._livescore = (None, {})    # (monotonic time, event_key -> fixture) of the last get_livescore call.
+        self._coverage = None           # (live events with socket data, live events) for the status line.
         self.started = datetime.now().astimezone()
         self.clock = FeedClock()
         self._delivery_lock = asyncio.Lock()
@@ -125,18 +128,59 @@ class Monitor:
                 alerted = True
                 log.warning("ALARM | %s | %s -> %s",match["favorite_player_name"],match["latest_prematch_odds"],odd)
             seen.append((key,match["favorite_player_name"],odd))
+        socket = self.stream.matches if self.stream_ready() else None
+        scores = await self._scores_for(live, socket)
         if third_set_enabled:
-            scores = self.stream.matches if self.stream_ready() else None
             if await process_third_set(self.config,self.api,self.repo,live,clock=self.clock,scores=scores):
                 alerted = True
         if alerted:
             self._alerts_ready.set()  # Delivery runs in its own loop so Telegram never stalls polling.
             self._alerted = self.repo.recently_alerted()
         try:
-            self._scores_from_odds(live)
+            self._store_missing_scores(live, socket or {}, scores or {})
         except Exception:
             log.exception("Canlı skor kaydedilemedi")
         return seen
+
+    async def _scores_for(self, live, socket):
+        """Score per live event: the socket's, plus one get_livescore call for live events it lacks.
+
+        The socket does not carry every match the odds feed has. A third-set candidate
+        missing from it could never be judged, and an alerted match would show no set
+        score, so those two trigger the call; nothing else does. Alerted matches alone
+        reuse a result up to LIVESCORE_REUSE_SECONDS old to keep the call count low.
+        """
+        socket = socket if socket is not None else {}
+        candidates = [key for key, item in live.items() if key not in socket and self.config.third_set_enabled
+                      and is_third_set(item.status) and not self.repo.third_set_decided(key)]
+        alerted = [key for key in self._alerted if key in live and key not in socket and key not in self._final_scores]
+        self._stream_coverage(live, socket)
+        if not candidates and not alerted:
+            return socket if self.stream_ready() else None
+        moment = time.monotonic()
+        cached_at, cached = self._livescore
+        if candidates or cached_at is None or moment - cached_at > LIVESCORE_REUSE_SECONDS:
+            payload = await self.api.livescore()
+            result = (payload or {}).get("result")
+            if isinstance(result, list):
+                cached = {str(row["event_key"]): row for row in result
+                          if isinstance(row, dict) and row.get("event_key") is not None}
+                self._livescore = (moment, cached)
+        return {**cached, **socket}  # The socket is pushed per point, so it wins where both have a match.
+
+    def _stream_coverage(self, live, socket):
+        if self.stream is None:
+            return
+        self._coverage = (sum(key in socket for key in live), len(live))
+
+    @staticmethod
+    def _fixture_score(row):
+        sets = sorted(([str(s.get("score_set")), str(s.get("score_first")), str(s.get("score_second"))]
+                       for s in row.get("scores") or [] if isinstance(s, dict) and s.get("score_set") is not None),
+                      key=lambda item: int(item[0]) if item[0].isdigit() else 99)
+        return dict(status=str(row.get("event_status") or ""), final_result=row.get("event_final_result"),
+                    game_result=row.get("event_game_result"), serve=row.get("event_serve"),
+                    sets=json.dumps(sets) if sets else None, winner=row.get("event_winner"))
 
     def _save_score(self, key, source, **score):
         signature = tuple(score.values())
@@ -146,31 +190,30 @@ class Monitor:
         self.repo.save_live_score(key, source=source, **score)
 
     def _store_alerted_scores(self, rows):
-        """Keep the panel's live score of alerted matches current; uses socket data only, no API call."""
+        """Keep the panel's live score of alerted matches current from socket messages; no API call."""
         for row in rows:
             key = str(row["event_key"])
             if key not in self._alerted:
                 continue
-            sets = sorted(([str(s.get("score_set")), str(s.get("score_first")), str(s.get("score_second"))]
-                           for s in row.get("scores") or [] if isinstance(s, dict) and s.get("score_set") is not None),
-                          key=lambda item: int(item[0]) if item[0].isdigit() else 99)
             if is_final(row):
-                self._final_from_socket.add(key)
+                self._final_scores.add(key)
             try:
-                self._save_score(key, "ws", status=str(row.get("event_status") or ""),
-                                 final_result=row.get("event_final_result"), game_result=row.get("event_game_result"),
-                                 serve=row.get("event_serve"), sets=json.dumps(sets) if sets else None,
-                                 winner=row.get("event_winner"))
+                self._save_score(key, "ws", **self._fixture_score(row))
             except Exception:
                 log.exception("Canlı skor kaydedilemedi: event=%s", key)
 
-    def _scores_from_odds(self, live):
-        """Without socket data for an alerted match, show the odds feed's status and set score instead."""
+    def _store_missing_scores(self, live, socket, scores):
+        """Alerted matches the socket lacks: get_livescore's score, else the odds feed's status and points."""
         for key in set(self._last_score) - self._alerted:
             self._last_score.pop(key, None)
-            self._final_from_socket.discard(key)
-        socket = self.stream.matches if self.stream_ready() else {}
-        for key in self._alerted - socket.keys() - self._final_from_socket:
+            self._final_scores.discard(key)
+        for key in self._alerted - socket.keys() - self._final_scores:
+            row = scores.get(key)
+            if row is not None:
+                if is_final(row):
+                    self._final_scores.add(key)
+                self._save_score(key, "livescore", **self._fixture_score(row))
+                continue
             item = live.get(key)
             if item is not None:
                 self._save_score(key, "odds", status=item.status, final_result=item.score,
@@ -214,6 +257,8 @@ class Monitor:
         if self.stream is not None:
             self.repo.set_state("stream_connected", int(self.stream.connected))
             self.repo.set_state("stream_messages", self.stream.messages)
+            if self._coverage is not None:
+                self.repo.set_state("stream_coverage", "%s/%s" % self._coverage)
 
     async def diagnose_live(self):
         """Read-only API/watchlist inspection, including when watchlist is empty."""
@@ -377,6 +422,8 @@ class Monitor:
             try:
                 count = len(self.repo.watched())
                 stream = (f"bağlı, {self.stream.messages} mesaj" if self.stream.connected else "kopuk") if self.stream else "kapalı"
+                if self.stream and self._coverage:
+                    stream += f", canlı maçların {self._coverage[0]}/{self._coverage[1]} kadarında skor var"
                 log.info("STATUS | uptime=%s | watchlist=%s | bugün alarm=%s | API requests=%s | WebSocket=%s | son başarılı=%s",
                          datetime.now().astimezone()-self.started,count,self.repo.count_today_alerts(self.config.timezone),
                          dict(self.api.counts),stream,self.api.last_success)
