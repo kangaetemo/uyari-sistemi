@@ -17,7 +17,9 @@ Panel, botun SQLite veritabanını salt okunur açan küçük bir web sitesidir.
 
 ## Canlı alarmlar ve API kullanımı
 
-Canlı alarmlar sekmesi ek API çağrısı yapmaz. Bot, zaten açık tuttuğu canlı skor WebSocket'inden gelen skoru yalnızca son 24 saatte alarm verilen maçlar için `live_scores` tablosuna yazar; güncel oran, botun 3 saniyede bir çektiği canlı oran sorgusundan gelir. WebSocket koptuğunda skor oran akışındaki durumdan (set sayısı ve oyun puanı) gösterilir, set skorları bağlantı gelince geri gelir.
+Skor öncelikle botun zaten açık tuttuğu canlı skor WebSocket'inden gelir ve yalnızca son 24 saatte alarm verilen maçlar için `live_scores` tablosuna yazılır; güncel oran, botun 3 saniyede bir çektiği canlı oran sorgusundan gelir.
+
+WebSocket her maçı taşımaz. Alarm verilen bir maç WebSocket'te yoksa bot `get_livescore` ile skoru alır (en fazla 10 saniyede bir, tek çağrı tüm canlı maçları kapsar). 3. set başlangıcı beklenen bir maç WebSocket'te yoksa da aynı çağrı yapılır; aksi halde o maç 3. set kuralında hiç değerlendirilemezdi. İkisi de yoksa çağrı yapılmaz. `get_livescore` de skoru vermezse oran akışındaki durum ve oyun puanı gösterilir. Üst satırdaki "WebSocket: bağlı (12/30 canlı maçta skor)" bilgisi WebSocket'in canlı maçların kaçını kapsadığını gösterir.
 
 Maç bittiğinde WebSocket'in son skoru kazanan tarafı hemen gösterir ("ön sonuç"). Resmi sonuç, istatistiklere giren kayıt olarak, botun düzenli sonuç taramasında `match_results` tablosuna yazılır.
 

@@ -43,6 +43,45 @@ def test_socket_scores_are_stored_only_for_alerted_matches(tmp_path):
     assert (row["status"], row["game_result"], row["serve"], row["source"]) == ("Set 3", "30 - 15", "First Player", "ws")
     assert json.loads(row["sets"]) == [["1", "6", "4"], ["2", "3", "6"], ["3", "2", "1"]]
     assert score(repo, "88") is None
+    calls = api.score_calls
+    asyncio.run(monitor.live_scan())                     # The socket has it now: no livescore call.
+    assert api.score_calls == calls and score(repo)["source"] == "ws"
+    repo.close()
+
+
+def test_alerted_match_missing_from_the_socket_gets_its_score_from_livescore(tmp_path, monkeypatch):
+    repo = Repository(tmp_path / "a.db")
+    alerted_match(repo)
+    api = FakeAPI(fixture=score_fixture(points="15 - 40", games=("4", "3")), payload=live_payload(status="Set 2"))
+    now = [100.0]
+    monkeypatch.setattr("app.core.monitor.time.monotonic", lambda: now[0])
+    monitor = Monitor(CONFIG, api, repo, None, connected_stream())   # Connected, but without event 77.
+    asyncio.run(monitor.live_scan())
+    row = score(repo)
+    assert (row["source"], row["game_result"]) == ("livescore", "15 - 40")
+    assert json.loads(row["sets"])[-1] == ["3", "4", "3"]
+    asyncio.run(monitor.live_scan())                     # Reused for a few seconds...
+    assert api.score_calls == 1
+    now[0] += 11
+    asyncio.run(monitor.live_scan())                     # ...then asked again.
+    assert api.score_calls == 2
+    repo.close()
+
+
+def test_third_set_opening_missing_from_the_socket_is_still_captured(tmp_path):
+    repo = Repository(tmp_path / "a.db")
+    api = FakeAPI()
+    monitor = Monitor(CONFIG, api, repo, None, connected_stream())   # Socket lacks event 77.
+    asyncio.run(monitor.live_scan())
+    assert api.score_calls == 1
+    assert [w["favorite_side"] for w in repo.third_set_watched()] == ["Home"]
+    repo.close()
+
+
+def test_no_livescore_call_when_nothing_needs_it(tmp_path):
+    repo = Repository(tmp_path / "a.db")
+    api = FakeAPI(payload=live_payload(status="Set 1"))
+    asyncio.run(Monitor(CONFIG, api, repo, None, connected_stream()).live_scan())
     assert api.score_calls == 0
     repo.close()
 
@@ -64,12 +103,13 @@ def test_final_socket_score_is_not_blanked_by_the_odds_feed(tmp_path):
     repo.close()
 
 
-def test_without_socket_the_odds_feed_status_is_used(tmp_path):
+def test_without_any_score_the_odds_feed_status_is_used(tmp_path):
     repo = Repository(tmp_path / "a.db")
     alerted_match(repo)
     stream = connected_stream()
     stream.connected = False
-    asyncio.run(Monitor(CONFIG, FakeAPI(payload=live_payload(status="Set 2", points="40 - 30")), repo, None, stream).live_scan())
+    api = FakeAPI(fixture={**score_fixture(), "event_key": "99"}, payload=live_payload(status="Set 2", points="40 - 30"))
+    asyncio.run(Monitor(CONFIG, api, repo, None, stream).live_scan())
     row = score(repo)
     assert (row["status"], row["game_result"], row["sets"], row["source"]) == ("Set 2", "40 - 30", None, "odds")
     repo.close()

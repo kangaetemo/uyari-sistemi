@@ -83,7 +83,7 @@ a{color:var(--accent)}
 {% if age is none %}<b class="bad">henüz tarama kaydı yok</b>
 {% elif age < 300 %}<b class="ok">çalışıyor</b>, son canlı tarama {{ age }} sn önce{% if state.get('live_events') %}, {{ state['live_events']['value'] }} canlı maç{% endif %}
 {% else %}<b class="bad">son canlı tarama {{ (age // 60) }} dk önce</b>{% endif %}
-{% set ws = state.get('stream_connected') %}{% if ws %} · WebSocket: {% if ws['value'] == '1' %}<b class="ok">bağlı</b>{% else %}<b class="bad">kopuk, livescore sorgusuyla devam</b>{% endif %}{% endif %}
+{% set ws = state.get('stream_connected') %}{% if ws %} · WebSocket: {% if ws['value'] == '1' %}<b class="ok">bağlı</b>{% set cov = state.get('stream_coverage') %}{% if cov %} ({{ cov['value'] }} canlı maçta skor){% endif %}{% else %}<b class="bad">kopuk, livescore sorgusuyla devam</b>{% endif %}{% endif %}
 </div>
 </div></header>
 <main><div class="wrap">

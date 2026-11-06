@@ -31,7 +31,7 @@
     {% if a.final or a.outcome != 'PENDING' %}<span class="badge {{ a.outcome }}">{{ outcome_names[a.outcome] }}</span>{% if a.provisional %} <span class="note" title="Maç bitti; resmi sonuç bir sonraki sonuç taramasında kaydedilir">ön sonuç</span>{% endif %}{% endif %}
     <a href="/match/{{ a.event_key }}">grafik</a>
   </div>
-  {% if s and not a.sets and not a.final %}<div class="note">Set skoru WebSocket bağlanınca görünür; şu an oran akışındaki set sayısı gösteriliyor.</div>{% endif %}
+  {% if s and not a.sets and not a.final %}<div class="note">Set skoru alınamadı; oran akışındaki durum ve oyun puanı gösteriliyor.</div>{% endif %}
 </div>
 {% else %}
 <p class="note">Bu dönemde alarm yok.</p>
