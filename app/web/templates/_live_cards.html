@@ -10,7 +10,7 @@
 {% set s = a.score %}
 <div class="live-card {{ 'done' if a.final }}">
   <div class="live-head">
-    <span>{{ rule_names[a.rule_type] }} · {{ a.tournament_name or '' }}</span>
+    <span>{{ rule_names.get(a.rule_type, a.rule_type) }}{% if a.rule_type == 'SERVE_FOR_SET' %} ({{ a.set_number }}. set){% endif %} · {{ a.tournament_name or '' }}</span>
     {% if a.final %}<span class="st">{{ match_status(s.status) if s else 'Bitti' }}</span>
     {% elif s %}{% set age = ago(s.updated_at) %}<span class="st on">{{ match_status(s.status) }}{% if age and age > 600 %} <span class="warn">· {{ age // 60 }} dk veri yok</span>{% endif %}</span>
     {% else %}<span class="st">Skor bekleniyor</span>{% endif %}

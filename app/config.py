@@ -31,6 +31,8 @@ class Config:
     live_stale_minutes: int = 45
     result_poll_seconds: int = 1800
     websocket_enabled: bool = True
+    serve_for_set_enabled: bool = True
+    serve_for_set_favorite_max: Decimal = Decimal("1.35")
 
 
 def parse_decimal(name, value):
@@ -81,6 +83,8 @@ def load_config(*, test_telegram: bool = False, require_api: bool = True) -> Con
         live_stale_minutes=integer("LIVE_STALE_MINUTES", "45"),
         result_poll_seconds=integer("RESULT_POLL_SECONDS", "1800"),
         websocket_enabled=os.getenv("WEBSOCKET_ENABLED", "true").lower() in {"1", "true", "yes"},
+        serve_for_set_enabled=os.getenv("SERVE_FOR_SET_ENABLED", "true").lower() in {"1", "true", "yes"},
+        serve_for_set_favorite_max=decimal("SERVE_FOR_SET_FAVORITE_MAX", "1.35"),
     )
     if require_api and not test_telegram and not config.api_key:
         raise ValueError("API_TENNIS_KEY .env içinde gerekli")
@@ -95,6 +99,8 @@ def load_config(*, test_telegram: bool = False, require_api: bool = True) -> Con
         raise ValueError("THIRD_SET_TRIGGER > THIRD_SET_MAX olmalı")
     if config.third_set_odds_max_age_seconds < 1:
         raise ValueError("THIRD_SET_ODDS_MAX_AGE_SECONDS >= 1 olmalı")
+    if config.serve_for_set_favorite_max <= Decimal("1"):
+        raise ValueError("SERVE_FOR_SET_FAVORITE_MAX > 1 olmalı")
     if config.prematch_poll_seconds < 30 or config.live_poll_seconds < 2 or config.status_poll_seconds < 30:
         raise ValueError("Polling aralıkları: prematch >=30, live >=2, status >=30 saniye")
     if config.match_expiry_hours < 1 or config.live_stale_minutes < 5 or config.result_poll_seconds < 300:

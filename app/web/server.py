@@ -11,11 +11,13 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.core.results import RULE_NAMES, alert_outcome
+from app.core.results import RULE_NAMES, RULES, alert_outcome
 from app.web import queries
 
 HERE = Path(__file__).parent
 OUTCOME_NAMES = {"WON": "Kazandı", "LOST": "Kaybetti", "PENDING": "Bekliyor", "VOID": "Geçersiz"}
+GAME_OUTCOMES = {"BROKE": "break yaptı", "HELD": "rakip servisini aldı"}
+SET_OUTCOMES = {"WON": "seti aldı", "LOST": "seti kaybetti"}
 STATUS_NAMES = {"PREMATCH_ELIGIBLE": "Maç önü, uygun", "PREMATCH_INELIGIBLE": "Maç önü, uygun değil", "LIVE": "Canlı",
                 "ALERTED": "Alarm verildi", "FINISHED": "Bitti", "CANCELLED": "İptal", "EXPIRED": "Süresi doldu",
                 "WATCHING": "İzleniyor", "CLOSED": "Kapandı", "ALERTED_CLOSED": "Alarm verildi, kapandı"}
@@ -83,7 +85,8 @@ def create_app(database_path: Path, username: str, password: str, tz):
     templates.env.globals.update(local=local, ago=ago, pct=pct, num=num, signed=signed, rule_names=RULE_NAMES,
                                  outcome_names=OUTCOME_NAMES, status_names=STATUS_NAMES, periods=PERIODS,
                                  outcome=alert_outcome, match_status=match_status, serving=serving,
-                                 live_periods=LIVE_PERIODS)
+                                 live_periods=LIVE_PERIODS, rules=RULES, game_outcomes=GAME_OUTCOMES,
+                                 set_outcomes=SET_OUTCOMES)
 
     def render(request, name, **context):
         conn = context.pop("_conn", None)
@@ -114,7 +117,7 @@ def create_app(database_path: Path, username: str, password: str, tz):
         conn = open_db()
         try:
             rows = queries.alerts(conn, days)
-            if rule in queries.RULES:
+            if rule in RULES:
                 rows = [r for r in rows if r["rule_type"] == rule]
             if result in OUTCOME_NAMES:
                 rows = [r for r in rows if alert_outcome(r) == result]
@@ -182,7 +185,7 @@ def create_app(database_path: Path, username: str, password: str, tz):
 
     @app.get("/analysis", response_class=HTMLResponse, dependencies=[Depends(require_login)])
     def analysis(request: Request, rule: str = "PREMATCH", days: int = Query(0, ge=0, le=3650), pmin: str = "", pmax: str = ""):
-        rule = rule if rule in queries.RULES else "PREMATCH"
+        rule = rule if rule in queries.ANALYSIS_RULES else "PREMATCH"
 
         def parse(value):
             try:

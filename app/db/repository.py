@@ -1,4 +1,5 @@
 import logging
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -38,8 +39,8 @@ CREATE TABLE IF NOT EXISTS alerts (
  trigger_live_odds TEXT, threshold TEXT, telegram_sent INTEGER NOT NULL DEFAULT 0,
  telegram_message_id TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT,
  created_at TEXT NOT NULL, rule_type TEXT NOT NULL DEFAULT 'PREMATCH',
- favorite_side TEXT, reference_odds TEXT,
- UNIQUE(event_key,rule_type,favorite_side)
+ favorite_side TEXT, reference_odds TEXT, set_number INTEGER NOT NULL DEFAULT 0,
+ UNIQUE(event_key,rule_type,favorite_side,set_number)
 );
 CREATE TABLE IF NOT EXISTS third_set_sessions (
  event_key TEXT PRIMARY KEY REFERENCES matches(event_key), decision TEXT NOT NULL,
@@ -63,6 +64,15 @@ CREATE TABLE IF NOT EXISTS match_results (
  event_key TEXT PRIMARY KEY REFERENCES matches(event_key), winner_side TEXT CHECK(winner_side IN ('Home','Away')),
  final_result TEXT, provider_status TEXT, outcome_type TEXT NOT NULL, recorded_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS serve_for_set (
+ event_key TEXT NOT NULL REFERENCES matches(event_key), set_number INTEGER NOT NULL,
+ favorite_side TEXT NOT NULL, favorite_player_name TEXT, prematch_odds TEXT,
+ favorite_games INTEGER NOT NULL, opponent_games INTEGER NOT NULL, game_result TEXT,
+ live_odds TEXT NOT NULL, created_at TEXT NOT NULL,
+ game_outcome TEXT CHECK(game_outcome IN ('BROKE','HELD')),
+ set_outcome TEXT CHECK(set_outcome IN ('WON','LOST')),
+ PRIMARY KEY(event_key,set_number)
+);
 CREATE TABLE IF NOT EXISTS live_scores (
  event_key TEXT PRIMARY KEY, status TEXT, final_result TEXT, game_result TEXT, serve TEXT,
  sets TEXT, winner TEXT, source TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -79,6 +89,7 @@ class Repository:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
         self._migrate_alerts(path)
+        self._migrate_alert_sets(path)
         self._add_missing_columns()
 
     def _migrate_alerts(self, path):
@@ -104,6 +115,29 @@ class Repository:
                 a.next_attempt_at,a.created_at,m.favorite_side,a.prematch_odds
                 FROM alerts_legacy a JOIN matches m USING(event_key)""")
             self.conn.execute("DROP TABLE alerts_legacy")
+
+    def _backup(self, path, label):
+        backup_path = path.with_name(f"{path.stem}.before-{label}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}.db")
+        backup = sqlite3.connect(backup_path)
+        try:
+            self.conn.backup(backup)
+        finally:
+            backup.close()
+
+    def _migrate_alert_sets(self, path):
+        """Add alerts.set_number: the serving-for-set rule may alert once in every set of a match."""
+        if "set_number" in {row["name"] for row in self.conn.execute("PRAGMA table_info(alerts)")}:
+            return
+        self._backup(path, "serve-for-set")
+        create_alerts = SCHEMA[SCHEMA.index("CREATE TABLE IF NOT EXISTS alerts"):SCHEMA.index("CREATE TABLE IF NOT EXISTS third_set_sessions")]
+        columns = ("id,event_key,favorite_player_name,prematch_odds,previous_live_odds,trigger_live_odds,threshold,"
+                   "telegram_sent,telegram_message_id,attempts,next_attempt_at,created_at,rule_type,favorite_side,reference_odds")
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute("ALTER TABLE alerts RENAME TO alerts_before_sets")
+            self.conn.execute(create_alerts)
+            self.conn.execute(f"INSERT INTO alerts({columns}) SELECT {columns} FROM alerts_before_sets")
+            self.conn.execute("DROP TABLE alerts_before_sets")
 
     def _add_missing_columns(self):
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(matches)")}
@@ -193,8 +227,10 @@ class Repository:
             return inserted.rowcount == 1
 
     def pending_alerts(self):
-        return self.conn.execute("""SELECT a.*,m.first_player_name,m.second_player_name,m.tournament_name
+        return self.conn.execute("""SELECT a.*,m.first_player_name,m.second_player_name,m.tournament_name,
+            s.favorite_games,s.opponent_games,s.game_result
             FROM alerts a JOIN matches m USING(event_key)
+            LEFT JOIN serve_for_set s ON a.rule_type='SERVE_FOR_SET' AND s.event_key=a.event_key AND s.set_number=a.set_number
             WHERE a.telegram_sent=0 AND a.attempts<? AND (a.next_attempt_at IS NULL OR a.next_attempt_at<=?)""", (MAX_ALERT_ATTEMPTS,now())).fetchall()
 
     def claim_alert(self, alert_id, lease_seconds=120):
@@ -327,6 +363,78 @@ class Repository:
                 sets=excluded.sets,winner=COALESCE(excluded.winner,live_scores.winner),
                 source=excluded.source,updated_at=excluded.updated_at""",
                 (event_key,status,final_result,game_result,serve,sets,winner,source,now()))
+
+    # --- Serving for the set -------------------------------------------------
+
+    def serve_for_set_favorites(self, event_keys, maximum):
+        """Matches among `event_keys` whose prematch favourite was priced at or below `maximum`."""
+        keys = [str(key) for key in event_keys]
+        found = {}
+        for start in range(0, len(keys), 500):
+            chunk = keys[start:start + 500]
+            rows = self.conn.execute(f"""SELECT event_key,favorite_side,favorite_player_name,latest_prematch_odds
+                FROM matches WHERE event_key IN ({",".join("?" * len(chunk))})
+                AND favorite_side IS NOT NULL AND latest_prematch_odds IS NOT NULL""", chunk).fetchall()
+            for row in rows:
+                try:
+                    if Decimal(row["latest_prematch_odds"]) <= maximum:
+                        found[row["event_key"]] = row
+                except ArithmeticError:
+                    continue
+        return found
+
+    def serve_for_set_alerted(self, event_key, set_number):
+        return self.conn.execute("SELECT 1 FROM serve_for_set WHERE event_key=? AND set_number=?",
+                                 (event_key, set_number)).fetchone() is not None
+
+    def record_serve_for_set(self, match, point, odd, threshold):
+        """Store the moment and create its alert, once per set."""
+        key, side = match["event_key"], match["favorite_side"]
+        stamp = now()
+        with self.conn:
+            inserted = self.conn.execute("""INSERT OR IGNORE INTO serve_for_set(event_key,set_number,favorite_side,
+                favorite_player_name,prematch_odds,favorite_games,opponent_games,game_result,live_odds,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (key, point.set_number, side, match["favorite_player_name"], match["latest_prematch_odds"],
+                 point.receiver_games, point.server_games, point.points, str(odd), stamp))
+            if inserted.rowcount != 1:
+                return False
+            self.conn.execute("""INSERT OR IGNORE INTO alerts(event_key,favorite_player_name,prematch_odds,
+                trigger_live_odds,threshold,created_at,rule_type,favorite_side,reference_odds,set_number)
+                VALUES (?,?,?,?,?,?,'SERVE_FOR_SET',?,?,?)""",
+                (key, match["favorite_player_name"], match["latest_prematch_odds"], str(odd), str(threshold),
+                 stamp, side, match["latest_prematch_odds"], point.set_number))
+        return True
+
+    def serve_for_set_open_keys(self, hours=6):
+        """Matches with a recent alert whose set outcome is not known yet."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        return {row[0] for row in self.conn.execute(
+            "SELECT DISTINCT event_key FROM serve_for_set WHERE set_outcome IS NULL AND created_at>=?", (cutoff,))}
+
+    def serve_for_set_open(self, event_key):
+        return self.conn.execute("SELECT * FROM serve_for_set WHERE event_key=? AND set_outcome IS NULL",
+                                 (event_key,)).fetchall()
+
+    def set_serve_for_set_outcome(self, event_key, set_number, game_outcome, set_outcome):
+        with self.conn:
+            self.conn.execute("UPDATE serve_for_set SET game_outcome=?,set_outcome=? WHERE event_key=? AND set_number=?",
+                              (game_outcome, set_outcome, event_key, set_number))
+
+    def settle_serve_for_set(self, event_key, winner_side, final_result, outcome_type):
+        """An alert in the deciding set is settled by the match result if the score feed missed the end."""
+        sets = re.fullmatch(r"\s*(\d+)\s*-\s*(\d+)\s*", final_result or "")
+        if outcome_type != "FINISHED" or winner_side is None or not sets:
+            return
+        last_set = int(sets[1]) + int(sets[2])
+        with self.conn:
+            for row in self.conn.execute("SELECT * FROM serve_for_set WHERE event_key=? AND set_number=? AND set_outcome IS NULL",
+                                         (event_key, last_set)).fetchall():
+                won = winner_side == row["favorite_side"]
+                # Winning the set from there means the favourite won the game it had to break in.
+                game = row["game_outcome"] or ("BROKE" if won else None)
+                self.conn.execute("UPDATE serve_for_set SET game_outcome=?,set_outcome=? WHERE event_key=? AND set_number=?",
+                                  (game, "WON" if won else "LOST", event_key, last_set))
 
     # --- Results -------------------------------------------------------------
 

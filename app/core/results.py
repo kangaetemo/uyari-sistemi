@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 SIDE_BY_WINNER = {"first player": "Home", "home": "Home", "second player": "Away", "away": "Away"}
-RULE_NAMES = {"PREMATCH": "Maç önü favorisi", "THIRD_SET": "3. set başlangıcı"}
+RULE_NAMES = {"PREMATCH": "Maç önü favorisi", "THIRD_SET": "3. set başlangıcı", "SERVE_FOR_SET": "Set için servis"}
+RULES = tuple(RULE_NAMES)
 
 
 @dataclass(frozen=True)
@@ -85,7 +86,7 @@ def format_report(rows, days):
     if not rows:
         lines.append("Bu dönemde alarm yok.")
         return "\n".join(lines)
-    for rule in [r for r in ("PREMATCH", "THIRD_SET") if r in stats] + ["ALL"]:
+    for rule in [r for r in RULES if r in stats] + ["ALL"]:
         item = stats[rule]
         settled = item["WON"] + item["LOST"]
         avg_odds = item["odds_sum"] / item["total"]

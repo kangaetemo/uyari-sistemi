@@ -16,10 +16,14 @@
 <span>İlk görülen</span><span>{{ m.first_seen_prematch_odds or '-' }}</span>
 <span>Son</span><span>{{ m.latest_prematch_odds or '-' }}</span></div></div>
 {% for a in detail.alerts %}
-<div class="card"><h3>Alarm: {{ rule_names[a.rule_type] }}</h3><div class="kv">
+<div class="card"><h3>Alarm: {{ rule_names.get(a.rule_type, a.rule_type) }}</h3><div class="kv">
 <span>Zaman</span><span>{{ local(a.created_at, '%d.%m %H:%M:%S') }}</span>
 <span>Taraf</span><span>{{ a.favorite_player_name or a.favorite_side }}</span>
 <span>Referans → alarm</span><span>{{ a.reference_odds or '-' }} → {{ a.trigger_live_odds }}</span>
+{% if a.rule_type == 'SERVE_FOR_SET' %}{% set sv = detail.serve.get(a.set_number) %}
+<span>Set</span><span>{{ a.set_number }}. set{% if sv %}, {{ sv.favorite_games }}-{{ sv.opponent_games }} geride{% if sv.game_result %} (oyun {{ sv.game_result }}){% endif %}{% endif %}</span>
+<span>Sonrası</span><span>{% if sv and sv.game_outcome %}{{ game_outcomes[sv.game_outcome] }}{% if sv.set_outcome %}, {{ set_outcomes[sv.set_outcome] }}{% endif %}{% else %}bekliyor{% endif %}</span>
+{% endif %}
 <span>Telegram</span><span>{{ 'gönderildi' if a.telegram_sent else 'gönderilmedi (' ~ a.attempts ~ ' deneme)' }}</span></div></div>
 {% endfor %}
 </div>
