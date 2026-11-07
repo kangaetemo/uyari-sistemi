@@ -11,11 +11,13 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.core.results import RULE_NAMES, RULES, alert_outcome
+from app.core.results import MATCH_RULES, RULE_NAMES, RULES, SET_RULES, alert_outcome, rule_outcome
 from app.web import queries
 
 HERE = Path(__file__).parent
 OUTCOME_NAMES = {"WON": "Kazandı", "LOST": "Kaybetti", "PENDING": "Bekliyor", "VOID": "Geçersiz"}
+# The serving-for-set rule is judged by the game after the alert, not by the match.
+BREAK_NAMES = {"WON": "Break yaptı", "LOST": "Break yapamadı", "PENDING": "Bekliyor", "VOID": "Geçersiz"}
 GAME_OUTCOMES = {"BROKE": "break yaptı", "HELD": "rakip servisini aldı"}
 SET_OUTCOMES = {"WON": "seti aldı", "LOST": "seti kaybetti"}
 STATUS_NAMES = {"PREMATCH_ELIGIBLE": "Maç önü, uygun", "PREMATCH_INELIGIBLE": "Maç önü, uygun değil", "LIVE": "Canlı",
@@ -84,7 +86,8 @@ def create_app(database_path: Path, username: str, password: str, tz):
 
     templates.env.globals.update(local=local, ago=ago, pct=pct, num=num, signed=signed, rule_names=RULE_NAMES,
                                  outcome_names=OUTCOME_NAMES, status_names=STATUS_NAMES, periods=PERIODS,
-                                 outcome=alert_outcome, match_status=match_status, serving=serving,
+                                 outcome=rule_outcome, match_outcome=alert_outcome, break_names=BREAK_NAMES,
+                                 set_rules=SET_RULES, match_status=match_status, serving=serving,
                                  live_periods=LIVE_PERIODS, rules=RULES, game_outcomes=GAME_OUTCOMES,
                                  set_outcomes=SET_OUTCOMES)
 
@@ -105,10 +108,14 @@ def create_app(database_path: Path, username: str, password: str, tz):
         conn = open_db()
         try:
             data = queries.overview(conn, days)
-            labels, counts = queries.daily_counts(queries.alerts(conn, 30), tz)
-            chart = {"labels": [label[5:] for label in labels],
-                     "series": {key: [counts[label][key] for label in labels] for key in OUTCOME_NAMES}}
-            return render(request, "overview.html", _conn=conn, days=days, data=data, chart=json.dumps(chart), page="overview")
+            recent = queries.alerts(conn, 30)
+            chart = {}
+            for name, rules in (("match", MATCH_RULES), ("serve", SET_RULES)):
+                labels, counts = queries.daily_counts([r for r in recent if r["rule_type"] in rules], tz)
+                chart["labels"] = [label[5:] for label in labels]
+                chart[name] = {key: [counts[label][key] for label in labels] for key in OUTCOME_NAMES}
+            return render(request, "overview.html", _conn=conn, days=days, data=data, chart=json.dumps(chart), page="overview",
+                          chart_has_serve=any(r["rule_type"] in SET_RULES for r in recent))
         finally:
             conn.close()
 
@@ -120,7 +127,7 @@ def create_app(database_path: Path, username: str, password: str, tz):
             if rule in RULES:
                 rows = [r for r in rows if r["rule_type"] == rule]
             if result in OUTCOME_NAMES:
-                rows = [r for r in rows if alert_outcome(r) == result]
+                rows = [r for r in rows if rule_outcome(r) == result]
             return render(request, "alerts.html", _conn=conn, days=days, rows=rows, rule=rule, result=result, page="alerts")
         finally:
             conn.close()

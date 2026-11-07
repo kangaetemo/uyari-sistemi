@@ -13,6 +13,11 @@ from decimal import Decimal
 SIDE_BY_WINNER = {"first player": "Home", "home": "Home", "second player": "Away", "away": "Away"}
 RULE_NAMES = {"PREMATCH": "Maç önü favorisi", "THIRD_SET": "3. set başlangıcı", "SERVE_FOR_SET": "Set için servis"}
 RULES = tuple(RULE_NAMES)
+# Rules judged by the match result; their totals are the "maç sonu" statistics.
+MATCH_RULES = ("PREMATCH", "THIRD_SET")
+# Rules judged by the game that follows the alert (did the favourite break back?).
+SET_RULES = ("SERVE_FOR_SET",)
+BREAK_RESULTS = {"BROKE": "WON", "HELD": "LOST"}
 
 
 @dataclass(frozen=True)
@@ -60,11 +65,35 @@ def alert_outcome(row):
     return "WON" if row["winner_side"] == row["favorite_side"] else "LOST"
 
 
+def break_outcome(row):
+    """WON when the favourite broke the player serving for the set, LOST when that player held.
+
+    VOID when the match ended (retirement, walkover...) before the game was settled.
+    """
+    if row["game_outcome"] in BREAK_RESULTS:
+        return BREAK_RESULTS[row["game_outcome"]]
+    return "VOID" if row["outcome_type"] is not None else "PENDING"
+
+
+def set_outcome(row):
+    """WON / LOST for the favourite in the alerted set, VOID when the match ended without it."""
+    if row["set_outcome"] in {"WON", "LOST"}:
+        return row["set_outcome"]
+    return "VOID" if row["outcome_type"] is not None else "PENDING"
+
+
+def rule_outcome(row):
+    """The outcome each rule is judged by: the break for set rules, the match result for the others."""
+    return break_outcome(row) if row["rule_type"] in SET_RULES else alert_outcome(row)
+
+
 def build_report(rows):
+    """Match-result counters per rule; "ALL" adds up only the match rules (MATCH_RULES)."""
     stats = defaultdict(lambda: {"total": 0, "WON": 0, "LOST": 0, "PENDING": 0, "VOID": 0,
                                  "retired": 0, "profit": Decimal(0), "odds_sum": Decimal(0)})
     for row in rows:
-        for rule in (row["rule_type"], "ALL"):
+        rules = (row["rule_type"], "ALL") if row["rule_type"] in MATCH_RULES else (row["rule_type"],)
+        for rule in rules:
             item = stats[rule]
             outcome = alert_outcome(row)
             odd = Decimal(row["trigger_live_odds"])
@@ -80,18 +109,46 @@ def build_report(rows):
     return stats
 
 
+def serve_report(rows):
+    """Serving-for-set alerts judged on their own terms: the break, the set, and then the match.
+
+    None when there is no such alert. `match` holds the usual match-result
+    counters of the same alerts, kept apart from the match rules' totals.
+    """
+    items = [row for row in rows if row["rule_type"] in SET_RULES]
+    if not items:
+        return None
+    out = {"total": len(items)}
+    for name, judge in (("break", break_outcome), ("set", set_outcome)):
+        counts = {key: 0 for key in ("WON", "LOST", "PENDING", "VOID")}
+        for row in items:
+            counts[judge(row)] += 1
+        settled = counts["WON"] + counts["LOST"]
+        out[name] = {**counts, "settled": settled, "rate": counts["WON"] / settled * 100 if settled else None}
+    # After a break the set is still open; this is how often the favourite then took it.
+    after = [row["set_outcome"] for row in items if row["game_outcome"] == "BROKE" and row["set_outcome"] in {"WON", "LOST"}]
+    out["set_after_break"] = {"WON": after.count("WON"), "settled": len(after),
+                              "rate": after.count("WON") / len(after) * 100 if after else None}
+    out["match"] = build_report(items)[SET_RULES[0]]
+    return out
+
+
 def format_report(rows, days):
     stats = build_report(rows)
     lines = [f"Son {days} gün alarm sonuçları"]
     if not rows:
         lines.append("Bu dönemde alarm yok.")
         return "\n".join(lines)
-    for rule in [r for r in RULES if r in stats] + ["ALL"]:
+    match_rules = [r for r in MATCH_RULES if r in stats]
+    if match_rules:
+        lines.append("")
+        lines.append("== Maç sonu alarmları (takip edilen taraf maçı kazandı mı) ==")
+    for rule in match_rules + (["ALL"] if match_rules else []):
         item = stats[rule]
         settled = item["WON"] + item["LOST"]
         avg_odds = item["odds_sum"] / item["total"]
         lines.append("")
-        lines.append(RULE_NAMES.get(rule, "Toplam"))
+        lines.append(RULE_NAMES.get(rule, "Maç sonu toplamı"))
         lines.append(f"  Alarm: {item['total']} | Kazandı: {item['WON']} | Kaybetti: {item['LOST']} | "
                      f"Bekliyor: {item['PENDING']} | Geçersiz: {item['VOID']}")
         if settled:
@@ -103,6 +160,25 @@ def format_report(rows, days):
                 lines.append(f"  Not: {item['retired']} sonuç maçtan çekilmeyle bitti; bahis sitelerinin kuralları farklı olabilir.")
             if settled < 100:
                 lines.append("  Uyarı: 100'den az sonuç var; oran istatistiksel olarak henüz güvenilir değil.")
+    serve = serve_report(rows)
+    if serve:
+        lines.append("")
+        lines.append("== Set kırma alarmları (set için servis) ==")
+        lines.append(f"  Alarm: {serve['total']}")
+        for key, label in (("break", "Break yaptı"), ("set", "Seti aldı")):
+            item = serve[key]
+            rate = f" (%{item['rate']:.1f})" if item["rate"] is not None else ""
+            lines.append(f"  {label}: {item['WON']} / {item['settled']}{rate} | Bekliyor: {item['PENDING']} | Geçersiz: {item['VOID']}")
+        after = serve["set_after_break"]
+        if after["settled"]:
+            lines.append(f"  Break sonrası seti aldı: {after['WON']} / {after['settled']} (%{after['rate']:.1f})")
+        match = serve["match"]
+        settled = match["WON"] + match["LOST"]
+        lines.append(f"  Ayrıca maç sonucu: Kazandı: {match['WON']} | Kaybetti: {match['LOST']} | Bekliyor: {match['PENDING']}"
+                     + (f" | Kazanma oranı: %{match['WON'] / settled * 100:.1f}" if settled else ""))
+        lines.append("  Not: Bu alarmlar maç sonu toplamına katılmaz; alarm oranı maç oranı olduğu için set kırmada teorik getiri hesaplanmaz.")
+        if serve["break"]["settled"] and serve["break"]["settled"] < 100:
+            lines.append("  Uyarı: 100'den az sonuç var; oran istatistiksel olarak henüz güvenilir değil.")
     lines.append("")
     lines.append("Teorik getiri, alarm anındaki oranın alınabildiğini varsayar; gerçek bahis kaydı değildir.")
     return "\n".join(lines)

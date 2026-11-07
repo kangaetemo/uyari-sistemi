@@ -3,7 +3,8 @@
 {%- if '.' in text %}{{ text.split('.')[0] }}<sup>{{ text.split('.')[1] }}</sup>{% else %}{{ text }}{% endif -%}
 {%- endmacro %}
 <p class="note refresh">{{ counts['live'] }} canlı · {{ counts['final'] }} bitti
-{%- if counts['WON'] or counts['LOST'] %} ({{ counts['WON'] }} kazandı, {{ counts['LOST'] }} kaybetti){% endif %}
+{%- if counts['WON'] or counts['LOST'] %} · maç sonu: {{ counts['WON'] }} kazandı, {{ counts['LOST'] }} kaybetti{% endif %}
+{%- if counts['BREAK_WON'] or counts['BREAK_LOST'] %} · set kırma: {{ counts['BREAK_WON'] }} break yaptı, {{ counts['BREAK_LOST'] }} yapamadı{% endif %}
 · güncellendi {{ local(now_iso, '%H:%M:%S') }}</p>
 <div class="live-grid">
 {% for a in rows %}
@@ -28,7 +29,9 @@
   <div class="live-foot">
     <span>Alarm {{ local(a.created_at, '%H:%M') }}: <b>{{ a.trigger_live_odds }}</b></span>
     <span>{{ "Son oran" if a.final else "Şimdi" }}: <b>{{ a.current_odds or '-' }}</b>{% if a.current_odds and not a.final %} <span class="note">({{ local(a.current_at, '%H:%M:%S') }})</span>{% endif %}</span>
-    {% if a.final or a.outcome != 'PENDING' %}<span class="badge {{ a.outcome }}">{{ outcome_names[a.outcome] }}</span>{% if a.provisional %} <span class="note" title="Maç bitti; resmi sonuç bir sonraki sonuç taramasında kaydedilir">ön sonuç</span>{% endif %}{% endif %}
+    {% if a.rule_type in set_rules %}
+    {% if a.final or a.outcome != 'PENDING' %}<span class="badge {{ a.outcome }}">{{ break_names[a.outcome] }}</span>{% if a.set_outcome or a.match_outcome != 'PENDING' %} <span class="note">{{ set_outcomes[a.set_outcome] if a.set_outcome else 'set bekliyor' }}{% if a.match_outcome != 'PENDING' %} · maç: {{ outcome_names[a.match_outcome]|lower }}{% endif %}</span>{% endif %}{% endif %}
+    {% elif a.final or a.outcome != 'PENDING' %}<span class="badge {{ a.outcome }}">{{ outcome_names[a.outcome] }}</span>{% if a.provisional %} <span class="note" title="Maç bitti; resmi sonuç bir sonraki sonuç taramasında kaydedilir">ön sonuç</span>{% endif %}{% endif %}
     <a href="/match/{{ a.event_key }}">grafik</a>
   </div>
   {% if s and not a.sets and not a.final %}<div class="note">Set skoru alınamadı; oran akışındaki durum ve oyun puanı gösteriliyor.</div>{% endif %}

@@ -9,20 +9,23 @@
 <a href="/alerts?days={{ days }}&result={{ result }}" class="{{ 'on' if not rule }}">Tüm kurallar</a>
 {% for r in rules %}<a href="/alerts?days={{ days }}&rule={{ r }}&result={{ result }}" class="{{ 'on' if rule==r }}">{{ rule_names[r] }}</a>{% endfor %}
 <a href="/alerts?days={{ days }}&rule={{ rule }}" class="{{ 'on' if not result }}">Tüm sonuçlar</a>
-{% for k, label in outcome_names.items() %}<a href="/alerts?days={{ days }}&rule={{ rule }}&result={{ k }}" class="{{ 'on' if result==k }}">{{ label }}</a>{% endfor %}
+{% for k, label in (break_names if rule in set_rules else outcome_names).items() %}<a href="/alerts?days={{ days }}&rule={{ rule }}&result={{ k }}" class="{{ 'on' if result==k }}">{{ label }}</a>{% endfor %}
 </div>
+<p class="note">Sonuç: maç sonu alarmlarında takip edilen tarafın maçı kazanıp kazanmadığı, set için servis alarmlarında favorinin o oyunu kırıp kırmadığı (set ve maç sonucu altında yazar).</p>
 <div class="scroll"><table class="table">
 <tr><th>Zaman</th><th>Kural</th><th>Maç</th><th>Takip edilen</th><th>Tür</th><th class="num">Referans</th><th class="num">Alarm oranı</th><th>Sonuç</th><th>Skor</th></tr>
 {% for a in rows %}{% set o = outcome(a) %}
 <tr>
 <td>{{ local(a.created_at) }}</td>
-<td>{{ rule_names.get(a.rule_type, a.rule_type) }}{% if a.rule_type == 'SERVE_FOR_SET' %}<br><span class="note">{{ a.set_number }}. set{% if a.favorite_games is not none %} {{ a.favorite_games }}-{{ a.opponent_games }}{% endif %}{% if a.game_outcome %} · {{ game_outcomes[a.game_outcome] }}{% endif %}{% if a.set_outcome %} · {{ set_outcomes[a.set_outcome] }}{% endif %}</span>{% endif %}</td>
+<td>{{ rule_names.get(a.rule_type, a.rule_type) }}{% if a.rule_type in set_rules %}<br><span class="note">{{ a.set_number }}. set{% if a.favorite_games is not none %} {{ a.favorite_games }}-{{ a.opponent_games }}{% endif %}</span>{% endif %}</td>
 <td><a href="/match/{{ a.event_key }}">{{ a.first_player_name or '?' }} – {{ a.second_player_name or '?' }}</a><br><span class="note">{{ a.tournament_name or '' }}</span></td>
 <td>{{ a.favorite_player_name or a.favorite_side }}</td>
 <td>{{ a.event_type or '-' }}</td>
 <td class="num">{{ a.reference_odds or '-' }}</td>
 <td class="num">{{ a.trigger_live_odds }}</td>
-<td><span class="badge {{ o }}">{{ outcome_names[o] }}</span>{% if a.outcome_type == 'RETIRED' %} <span class="note">çekilme</span>{% endif %}</td>
+<td>{% if a.rule_type in set_rules %}{% set mo = match_outcome(a) %}<span class="badge {{ o }}">{{ break_names[o] }}</span>
+<br><span class="note">{% if a.set_outcome %}{{ set_outcomes[a.set_outcome] }}{% else %}set bekliyor{% endif %} · maç: {{ outcome_names[mo]|lower }}</span>
+{%- else %}<span class="badge {{ o }}">{{ outcome_names[o] }}</span>{% endif %}{% if a.outcome_type == 'RETIRED' %} <span class="note">çekilme</span>{% endif %}</td>
 <td>{{ a.final_result or '-' }}</td>
 </tr>
 {% else %}

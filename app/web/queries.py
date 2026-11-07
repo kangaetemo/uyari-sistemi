@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from app.api.live_stream import is_final
-from app.core.results import RULES, alert_outcome, build_report, parse_result
+from app.core.results import MATCH_RULES, SET_RULES, alert_outcome, break_outcome, build_report, parse_result, rule_outcome, serve_report
 
 ANALYSIS_RULES = ("PREMATCH", "THIRD_SET")  # Rules with an odds threshold to replay.
 PREMATCH_THRESHOLDS = [Decimal(x) for x in ("1.60", "1.70", "1.80", "1.90", "2.00", "2.10", "2.20", "2.40", "2.60", "2.80", "3.00")]
@@ -71,40 +71,38 @@ def summarize(stats):
 
 
 def overview(conn, days):
+    """Match-result rules and the serving-for-set rule, each with its own statistics.
+
+    The serving-for-set alerts are judged by the break and the set, so they stay
+    out of the match-result totals, the per-type table and the match chart.
+    """
     rows = alerts(conn, days)
+    match_rows = [row for row in rows if row["rule_type"] in MATCH_RULES]
+    serve_rows = [row for row in rows if row["rule_type"] in SET_RULES]
     by_rule = summarize(build_report(rows))
     by_type = defaultdict(list)
-    for row in rows:
+    for row in match_rows:
         by_type[row["event_type"] or "Bilinmiyor"].append(row)
     types = sorted(((name, summarize(build_report(items))["ALL"]) for name, items in by_type.items()),
                    key=lambda pair: -pair[1]["total"])
-    return {"rows": rows, "by_rule": by_rule, "by_type": types, "serve": serve_for_set_stats(rows)}
-
-
-def serve_for_set_stats(rows):
-    """How often the favourite broke back and won the set after a serving-for-set alert."""
-    items = [row for row in rows if row["rule_type"] == "SERVE_FOR_SET"]
-    if not items:
-        return None
-    broke = sum(row["game_outcome"] == "BROKE" for row in items)
-    game_known = sum(row["game_outcome"] is not None for row in items)
-    set_won = sum(row["set_outcome"] == "WON" for row in items)
-    set_known = sum(row["set_outcome"] is not None for row in items)
-    return {"total": len(items), "broke": broke, "game_known": game_known,
-            "broke_rate": broke / game_known * 100 if game_known else None,
-            "set_won": set_won, "set_known": set_known,
-            "set_rate": set_won / set_known * 100 if set_known else None}
+    serve_types = defaultdict(list)
+    for row in serve_rows:
+        serve_types[row["event_type"] or "Bilinmiyor"].append(row)
+    serve_by_type = sorted(((name, serve_report(items)) for name, items in serve_types.items()),
+                           key=lambda pair: -pair[1]["total"])
+    return {"rows": rows, "match_rows": match_rows, "by_rule": by_rule, "by_type": types,
+            "serve": serve_report(serve_rows), "serve_by_type": serve_by_type}
 
 
 def daily_counts(rows, tz, days=30):
-    """Alerts per local day for the last `days` days, split by outcome, oldest first."""
+    """Alerts per local day for the last `days` days, split by each rule's own outcome, oldest first."""
     today = datetime.now(tz).date()
     labels = [(today - timedelta(days=offset)).isoformat() for offset in range(days - 1, -1, -1)]
     counts = {label: {"WON": 0, "LOST": 0, "PENDING": 0, "VOID": 0} for label in labels}
     for row in rows:
         day = datetime.fromisoformat(row["created_at"]).astimezone(tz).date().isoformat()
         if day in counts:
-            counts[day][alert_outcome(row)] += 1
+            counts[day][rule_outcome(row)] += 1
     return labels, counts
 
 
@@ -182,9 +180,16 @@ def live_alerts(conn, hours):
                 outcome = "VOID" if result.outcome_type in {"CANCELLED", "WALKOVER"} or result.winner_side is None else \
                     "WON" if result.winner_side == row["favorite_side"] else "LOST"
                 provisional = True
+        match_outcome = outcome
+        if row["rule_type"] in SET_RULES:
+            # Judged by the break; the match result is shown beside it.
+            outcome = break_outcome(row)
+            if outcome == "PENDING" and final:
+                outcome = "VOID"
+            provisional = False
         sets, points = _score_lines(score)
         item.update(score=score, sets=sets, points=points, final=final or row["outcome_type"] is not None,
-                    outcome=outcome, provisional=provisional,
+                    outcome=outcome, match_outcome=match_outcome, provisional=provisional,
                     current_odds=latest["live_odds"] if latest else None,
                     current_at=latest["observed_at"] if latest else None)
         out.append(item)
@@ -192,7 +197,7 @@ def live_alerts(conn, hours):
     counts = defaultdict(int)
     for item in out:
         counts["final" if item["final"] else "live"] += 1
-        counts[item["outcome"]] += 1
+        counts[("BREAK_" if item["rule_type"] in SET_RULES else "") + item["outcome"]] += 1
     return out, counts
 
 
