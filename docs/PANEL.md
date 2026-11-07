@@ -6,7 +6,7 @@ Panel, botun SQLite veritabanını salt okunur açan küçük bir web sitesidir.
 
 | Sayfa | Ne gösterir |
 | --- | --- |
-| Genel bakış | Kural bazında kazanma oranı, başabaş oranı (1 / ortalama alarm oranı), teorik getiri; son 30 günün günlük alarmları; maç türüne (ATP, WTA, Challenger, ITF) göre kırılım; set için servis alarmlarında favorinin o oyunu kırma ve seti alma oranı |
+| Genel bakış | İki ayrı bölüm. **Maç sonu alarmları** (maç önü favorisi, 3. set): kural bazında kazanma oranı, başabaş oranı (1 / ortalama alarm oranı), teorik getiri, toplam, günlük grafik ve maç türüne (ATP, WTA, Challenger, ITF) göre kırılım. **Set kırma alarmları** (set için servis): favorinin o oyunu kırma oranı, seti alma oranı, break sonrası seti alma oranı, aynı alarmların maç sonucu, kendi günlük grafiği ve maç türü kırılımı. Set kırma alarmları maç sonu toplamına katılmaz |
 | Canlı alarmlar | Son 6/12/24/48 saatte alarm verilen maçlar: set skorları, oyun puanı, servis, takip edilen tarafın alarm oranı ve güncel oranı, kazandı/kaybetti. 5 saniyede bir kendini yeniler |
 | Alarmlar | Tüm alarmlar; kurala, döneme ve sonuca göre filtre |
 | Maç sayfası | Maç önü oran geçmişi, canlı oran grafiği, eşik ve referans çizgisi, alarm noktası, sonuç |

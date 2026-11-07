@@ -3,6 +3,7 @@ import asyncio
 import json
 import sqlite3
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -10,10 +11,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.monitor import Monitor
+from app.core.results import break_outcome, build_report, format_report, rule_outcome, serve_report, set_outcome
 from app.core.parsers import PrematchOdds
 from app.core.serve_for_set import outcome_update, serving_for_set
 from app.db.repository import Repository
 from app.notifications.telegram import format_alert
+from app.web import queries
 from app.web.server import create_app
 from tests.test_live_stream import connected_stream
 from tests.test_third_set import CONFIG, FakeAPI, live_payload
@@ -254,9 +257,13 @@ def test_panel_shows_the_rule(tmp_path):
     repo.close()
     client = TestClient(create_app(path, *AUTH, CONFIG.timezone))
     overview = client.get("/", auth=AUTH).text
-    assert "Set için servis" in overview and "Set için servis: sonrası" in overview
+    assert "Maç sonu alarmları" in overview and "Set kırma alarmları (set için servis)" in overview
+    assert "Break (o oyun)" in overview and "Aynı alarmlarda maç sonucu" in overview
     listing = client.get("/alerts?rule=SERVE_FOR_SET", auth=AUTH).text
-    assert "2. set 4-5" in listing and "break yaptı" in listing
+    assert "2. set 4-5" in listing and "Break yaptı" in listing and "maç: bekliyor" in listing
+    # The break is the rule's own result, so the filter follows it.
+    assert "2. set 4-5" in client.get("/alerts?rule=SERVE_FOR_SET&result=WON", auth=AUTH).text
+    assert "2. set 4-5" not in client.get("/alerts?rule=SERVE_FOR_SET&result=PENDING", auth=AUTH).text
     detail = client.get("/match/77", auth=AUTH).text
     assert "4-5 geride" in detail and "break yaptı" in detail
     assert client.get("/live", auth=AUTH).status_code == 200
@@ -298,3 +305,50 @@ def test_no_livescore_call_without_a_favorite_missing_from_socket(tmp_path):
     asyncio.run(Monitor(CONFIG_ON, api, repo, None, connected_stream()).live_scan())
     assert api.score_calls == 0 and serve_alerts(repo) == []
     repo.close()
+
+
+def test_set_break_stats_are_kept_apart_from_match_stats(tmp_path):
+    path = tmp_path / "a.db"
+    repo = Repository(path)
+    favorite_match(repo)
+    stream = connected_stream(fixture((4, 5)))
+    asyncio.run(Monitor(CONFIG_ON, FakeAPI(payload=live_payload(home="2.60", status="Set 2")), repo, None, stream).live_scan())
+    stream.handle(json.dumps(fixture((5, 5), serve="First Player")))
+    stream.handle(json.dumps({**fixture((7, 5), status="Set 3"), "event_game_result": "0 - 0"}))
+    repo.save_result("77", "Away", "1 - 2", "Finished", "FINISHED")  # Broke back, took the set, lost the match.
+    rows = repo.alerts_with_results(datetime.now(timezone.utc) - timedelta(days=1))
+    assert sorted(r["rule_type"] for r in rows) == ["PREMATCH", "SERVE_FOR_SET"]
+
+    stats = build_report(rows)
+    assert stats["ALL"]["total"] == 1 and stats["ALL"]["LOST"] == 1  # Only the prematch alert.
+    assert stats["SERVE_FOR_SET"]["LOST"] == 1
+    serve = serve_report(rows)
+    assert (serve["break"]["WON"], serve["break"]["rate"]) == (1, 100)
+    assert (serve["set"]["WON"], serve["set_after_break"]["settled"]) == (1, 1)
+    assert serve["match"]["LOST"] == 1
+
+    text = format_report(rows, 30)
+    match_part, serve_part = text.split("== Set kırma alarmları (set için servis) ==")
+    assert "Set için servis" not in match_part and "Maç sonu toplamı" in match_part
+    assert "Break yaptı: 1 / 1 (%100.0)" in serve_part and "Seti aldı: 1 / 1 (%100.0)" in serve_part
+    assert "Ayrıca maç sonucu: Kazandı: 0 | Kaybetti: 1" in serve_part
+    repo.close()
+
+    conn = queries.connect(path)
+    data = queries.overview(conn, 30)
+    assert [r["rule_type"] for r in data["match_rows"]] == ["PREMATCH"]
+    assert [(name, s["total"]) for name, s in data["by_type"]] == [("Itf Men Singles", 1)]
+    assert [(name, t["break"]["WON"]) for name, t in data["serve_by_type"]] == [("Itf Men Singles", 1)]
+    conn.close()
+
+
+@pytest.mark.parametrize("game,set_result,outcome_type,expected", [
+    ("BROKE", None, None, ("WON", "PENDING")),
+    ("HELD", "LOST", None, ("LOST", "LOST")),
+    (None, None, None, ("PENDING", "PENDING")),
+    (None, None, "RETIRED", ("VOID", "VOID")),
+])
+def test_break_and_set_outcomes(game, set_result, outcome_type, expected):
+    row = {"rule_type": "SERVE_FOR_SET", "game_outcome": game, "set_outcome": set_result, "outcome_type": outcome_type}
+    assert (break_outcome(row), set_outcome(row)) == expected
+    assert rule_outcome(row) == expected[0]

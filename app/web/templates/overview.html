@@ -1,37 +1,27 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Genel bakış</h1>
-<p class="sub">Kazanma oranı, takip edilen tarafın maçı kazandığı sonuçlanmış alarmların payıdır. Başabaş oranı, ortalama alarm oranında kâra geçmek için gereken kazanma oranıdır (1 / oran).</p>
+<p class="sub">Maç sonu alarmları (maç önü favorisi, 3. set) takip edilen tarafın maçı kazanıp kazanmadığıyla ölçülür. Set kırma alarmları (set için servis) ayrı tutulur: favorinin o oyunu kırıp kırmadığı ve seti alıp almadığıyla ölçülür, maç sonu toplamına katılmaz.</p>
 <div class="filters">{% for d, label in periods %}<a href="/?days={{ d }}" class="{{ 'on' if days==d }}">{{ label }}</a>{% endfor %}</div>
-{% if not data.rows %}
-<div class="card">Bu dönemde alarm yok.</div>
-{% else %}
+
+<h2>Maç sonu alarmları</h2>
+<p class="note">Kazanma oranı, takip edilen tarafın maçı kazandığı sonuçlanmış alarmların payıdır. Başabaş oranı, ortalama alarm oranında kâra geçmek için gereken kazanma oranıdır (1 / oran).</p>
+{% if data.match_rows %}
 <div class="cards">
-{% for rule in rules if rule in data.by_rule %}
+{% for rule in rules if rule in data.by_rule and rule not in set_rules %}
 {% with title=rule_names[rule], s=data.by_rule[rule] %}{% include "_stats_card.html" %}{% endwith %}
 {% endfor %}
-{% with title="Toplam", s=data.by_rule['ALL'] %}{% include "_stats_card.html" %}{% endwith %}
-{% if data.serve %}{% set v = data.serve %}
-<div class="card">
-<h3>Set için servis: sonrası</h3>
-<div class="big">{{ pct(v.broke_rate) }}</div>
-<div class="note">favorinin o oyunu kırma oranı, {{ v.game_known }} sonuçlanmış alarm</div>
-<div class="kv">
-<span>Alarm</span><span>{{ v.total }}</span>
-<span>Break yaptı</span><span>{{ v.broke }} / {{ v.game_known }}</span>
-<span>Seti aldı</span><span>{{ v.set_won }} / {{ v.set_known }} ({{ pct(v.set_rate) }})</span>
+{% with title="Maç sonu toplamı", s=data.by_rule['ALL'] %}{% include "_stats_card.html" %}{% endwith %}
 </div>
-<div class="note">Maçı kazanma oranı "Set için servis" kartındadır.</div>
-</div>
-{% endif %}
-</div>
+{% else %}
+<div class="card">Bu dönemde maç sonu alarmı yok.</div>
 {% endif %}
 
-<h2>Son 30 gün, günlük alarmlar</h2>
+<h3>Son 30 gün, günlük maç sonu alarmları</h3>
 <div class="chart"><canvas id="daily"></canvas></div>
 
 {% if data.by_type %}
-<h2>Maç türüne göre</h2>
+<h3>Maç türüne göre (maç sonu alarmları)</h3>
 <div class="scroll"><table class="table">
 <tr><th>Tür</th><th class="num">Alarm</th><th class="num">Kazandı</th><th class="num">Kaybetti</th><th class="num">Bekliyor</th><th class="num">Kazanma</th><th class="num">Başabaş</th><th class="num">Teorik getiri</th></tr>
 {% for name, s in data.by_type %}
@@ -41,19 +31,72 @@
 </table></div>
 {% endif %}
 <p class="note">Teorik getiri, her alarma alarm anındaki orandan 1 birim yatırılmış gibi hesaplanır; o oranın gerçekten alınabildiğini varsayar.</p>
+
+<h2>Set kırma alarmları (set için servis)</h2>
+<p class="note">Favori bir break gerideyken rakip set için servis ettiğinde verilen alarmlar. Asıl ölçü favorinin o oyunu kırmasıdır; seti ve maçı alması ayrıca gösterilir.</p>
+{% if data.serve %}{% set v = data.serve %}
+<div class="cards">
+<div class="card">
+<h3>Break (o oyun)</h3>
+<div class="big">{{ pct(v.break.rate) }}</div>
+<div class="note">favorinin o oyunu kırma oranı, {{ v.break.settled }} sonuçlanmış alarm</div>
+<div class="kv">
+<span>Alarm</span><span>{{ v.total }}</span>
+<span>Break yaptı / yapamadı</span><span>{{ v.break.WON }} / {{ v.break.LOST }}</span>
+<span>Bekliyor / geçersiz</span><span>{{ v.break.PENDING }} / {{ v.break.VOID }}</span>
+</div>
+{% if v.break.settled and v.break.settled < 100 %}<div class="note warn">100'den az sonuç: oran henüz güvenilir değil.</div>{% endif %}
+</div>
+<div class="card">
+<h3>Set</h3>
+<div class="big">{{ pct(v.set.rate) }}</div>
+<div class="note">favorinin seti alma oranı, {{ v.set.settled }} sonuçlanmış alarm</div>
+<div class="kv">
+<span>Seti aldı / kaybetti</span><span>{{ v.set.WON }} / {{ v.set.LOST }}</span>
+<span>Bekliyor / geçersiz</span><span>{{ v.set.PENDING }} / {{ v.set.VOID }}</span>
+<span>Break sonrası seti aldı</span><span>{{ v.set_after_break.WON }} / {{ v.set_after_break.settled }} ({{ pct(v.set_after_break.rate) }})</span>
+</div>
+</div>
+{% with title="Aynı alarmlarda maç sonucu", s=data.by_rule['SERVE_FOR_SET'] %}{% include "_stats_card.html" %}{% endwith %}
+</div>
+<p class="note">Alarm oranı favorinin maç oranıdır; bu yüzden teorik getiri yalnızca maç sonucu kartında hesaplanır.</p>
+{% else %}
+<div class="card">Bu dönemde set kırma alarmı yok.</div>
+{% endif %}
+
+{% if chart_has_serve %}
+<h3>Son 30 gün, günlük set kırma alarmları</h3>
+<div class="chart"><canvas id="daily-serve"></canvas></div>
+{% endif %}
+
+{% if data.serve_by_type %}
+<h3>Maç türüne göre (set kırma alarmları)</h3>
+<div class="scroll"><table class="table">
+<tr><th>Tür</th><th class="num">Alarm</th><th class="num">Break yaptı</th><th class="num">Yapamadı</th><th class="num">Bekliyor</th><th class="num">Break oranı</th><th class="num">Seti aldı</th><th class="num">Set oranı</th></tr>
+{% for name, t in data.serve_by_type %}
+<tr><td>{{ name }}</td><td class="num">{{ t.total }}</td><td class="num">{{ t.break.WON }}</td><td class="num">{{ t.break.LOST }}</td><td class="num">{{ t.break.PENDING }}</td>
+<td class="num">{{ pct(t.break.rate) }}</td><td class="num">{{ t.set.WON }} / {{ t.set.settled }}</td><td class="num">{{ pct(t.set.rate) }}</td></tr>
+{% endfor %}
+</table></div>
+{% endif %}
 {% endblock %}
 {% block scripts %}
 <script src="/static/chart.umd.min.js"></script>
 <script>
 const data = {{ chart | safe }};
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-const names = {WON:"Kazandı", LOST:"Kaybetti", PENDING:"Bekliyor", VOID:"Geçersiz"};
-new Chart(document.getElementById("daily"), {
-  type: "bar",
-  data: {labels: data.labels, datasets: Object.keys(names).map(k => ({label: names[k], data: data.series[k], backgroundColor: css("--" + k.toLowerCase())}))},
-  options: {animation: false, maintainAspectRatio: false, scales: {x: {stacked: true, ticks: {color: css("--muted")}, grid: {display: false}},
-    y: {stacked: true, beginAtZero: true, ticks: {precision: 0, color: css("--muted")}, grid: {color: css("--line")}}},
-    plugins: {legend: {labels: {color: css("--text")}}}}
-});
+function daily(id, series, names) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  new Chart(el, {
+    type: "bar",
+    data: {labels: data.labels, datasets: Object.keys(names).map(k => ({label: names[k], data: series[k], backgroundColor: css("--" + k.toLowerCase())}))},
+    options: {animation: false, maintainAspectRatio: false, scales: {x: {stacked: true, ticks: {color: css("--muted")}, grid: {display: false}},
+      y: {stacked: true, beginAtZero: true, ticks: {precision: 0, color: css("--muted")}, grid: {color: css("--line")}}},
+      plugins: {legend: {labels: {color: css("--text")}}}}
+  });
+}
+daily("daily", data.match, {WON:"Kazandı", LOST:"Kaybetti", PENDING:"Bekliyor", VOID:"Geçersiz"});
+daily("daily-serve", data.serve, {WON:"Break yaptı", LOST:"Break yapamadı", PENDING:"Bekliyor", VOID:"Geçersiz"});
 </script>
 {% endblock %}

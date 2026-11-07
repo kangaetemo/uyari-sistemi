@@ -459,6 +459,7 @@ class Repository:
 
     def alerts_with_results(self, since_utc):
         return self.conn.execute("""SELECT a.*,m.first_player_name,m.second_player_name,m.tournament_name,
-            r.winner_side,r.final_result,r.outcome_type
+            r.winner_side,r.final_result,r.outcome_type,s.game_outcome,s.set_outcome
             FROM alerts a JOIN matches m USING(event_key) LEFT JOIN match_results r USING(event_key)
+            LEFT JOIN serve_for_set s ON a.rule_type='SERVE_FOR_SET' AND s.event_key=a.event_key AND s.set_number=a.set_number
             WHERE a.created_at>=? ORDER BY a.created_at""", (since_utc.isoformat(),)).fetchall()
