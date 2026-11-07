@@ -5,10 +5,10 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from app.api.live_stream import is_final
-from app.core.parsers import parse_live_odds, parse_prematch_odds
+from app.core.parsers import PrematchOdds, parse_live_odds, parse_prematch_odds
 from app.core.results import parse_result
 from app.core.rules import eligible
-from app.core.serve_for_set import process_serve_for_set, serving_for_set, track_outcomes
+from app.core.serve_for_set import current_set, process_serve_for_set, progress, serving_for_set, set_games, track_outcomes
 from app.core.third_set import FeedClock, is_third_set, opening_score, process_third_set
 from app.notifications.telegram import format_alert
 
@@ -16,6 +16,8 @@ log = logging.getLogger(__name__)
 RESULT_LOOKBACK_DAYS = 7
 HEARTBEAT_SECONDS = 30
 LIVESCORE_REUSE_SECONDS = 10
+# A live price stands in for missing prematch odds only this early: at most one game of set 1 played.
+LIVE_REFERENCE_MAX_GAMES = 1
 
 
 def event_state(fixture):
@@ -63,6 +65,10 @@ class Monitor:
         self._delivery_lock = asyncio.Lock()
         self._alerts_ready = asyncio.Event()
         self._last_heartbeat = None
+        self.live_reference_enabled = getattr(config, "live_reference_enabled", False)
+        self._priced = set()            # Events the prematch odds feed has listed since start.
+        self._priced_ready = False      # No live reference before one prematch scan has run.
+        self._reference_done = set()    # Events already judged for a live reference.
 
     def _store_result(self, key, fixture):
         result = parse_result(fixture)
@@ -83,6 +89,8 @@ class Monitor:
             return []
         fixture_map = {str(f["event_key"]):f for f in fixtures.get("result",[]) if isinstance(f,dict) and f.get("event_key") is not None}
         odds_map = parse_prematch_odds(odds_data)
+        self._priced |= odds_map.keys()
+        self._priced_ready = True
         found = []
         for key, fixture in fixture_map.items():
             state = event_state(fixture)
@@ -108,7 +116,7 @@ class Monitor:
     async def live_scan(self):
         watched = self.repo.watched()
         third_set_enabled = self.config.third_set_enabled
-        if not watched and not third_set_enabled and not self.serve_for_set_enabled:
+        if not watched and not third_set_enabled and not self.serve_for_set_enabled and not self.live_reference_enabled:
             return []
         payload = await self.api.live_odds()
         if not payload:
@@ -136,7 +144,13 @@ class Monitor:
                 log.warning("ALARM | %s | %s -> %s",match["favorite_player_name"],match["latest_prematch_odds"],odd)
             seen.append((key,match["favorite_player_name"],odd))
         socket = self.stream.matches if self.stream_ready() else None
-        scores = await self._scores_for(live, socket)
+        references = self._reference_candidates(live)
+        scores = await self._scores_for(live, socket, references)
+        if references:
+            try:
+                self._adopt_live_references(live, scores or {}, references)
+            except Exception:
+                log.exception("Canlı referans oranı kaydedilemedi")
         if third_set_enabled:
             if await process_third_set(self.config,self.api,self.repo,live,clock=self.clock,scores=scores):
                 alerted = True
@@ -155,23 +169,27 @@ class Monitor:
             log.exception("Canlı skor kaydedilemedi")
         return seen
 
-    async def _scores_for(self, live, socket):
-        """Score per live event: the socket's, plus one get_livescore call for live events it lacks.
+    async def _scores_for(self, live, socket, extra=()):
+        """Score per live event: the socket's, plus one get_livescore call when a rule needs a fresh score.
 
-        The socket does not carry every match the odds feed has. A third-set candidate
-        or a serving-for-set candidate (a live heavy favourite, or an alert whose set
-        outcome is still open) missing from it could never be judged, and an alerted
-        match would show no set score, so those trigger the call; nothing else does.
-        Alerted matches alone reuse a result up to LIVESCORE_REUSE_SECONDS old to keep
-        the call count low.
+        The socket does not carry every match the odds feed has, and on the live
+        server it pushes far less often than once a point (a few messages a minute
+        for all matches), so a serving-for-set or third-set moment could reach the
+        bot a minute late from it. A third-set candidate or a serving-for-set
+        candidate (a live heavy favourite, or an alert whose set outcome is still
+        open) therefore always triggers the call, socket or not, and the more
+        advanced of the two rows is used. `extra` are further events that need a
+        score (live-reference candidates). Alerted matches the socket lacks only
+        need a score for the panel, so they reuse a result up to
+        LIVESCORE_REUSE_SECONDS old to keep the call count low.
         """
         socket = socket if socket is not None else {}
-        candidates = [key for key, item in live.items() if key not in socket and self.config.third_set_enabled
+        candidates = [key for key, item in live.items() if self.config.third_set_enabled
                       and is_third_set(item.status) and not self.repo.third_set_decided(key)]
         if self.serve_for_set_enabled:
-            missing = [key for key in live if key not in socket]
-            favorites = self.repo.serve_for_set_favorites(missing, self.config.serve_for_set_favorite_max)
-            candidates += [key for key in missing if key in favorites or key in self._serve_open]
+            favorites = self.repo.serve_for_set_favorites(live.keys(), self.config.serve_for_set_favorite_max)
+            candidates += [key for key in live if key in favorites or key in self._serve_open]
+        candidates += [key for key in extra if key in live]
         alerted = [key for key in self._alerted if key in live and key not in socket and key not in self._final_scores]
         self._stream_coverage(live, socket)
         if not candidates and not alerted:
@@ -185,7 +203,56 @@ class Monitor:
                 cached = {str(row["event_key"]): row for row in result
                           if isinstance(row, dict) and row.get("event_key") is not None}
                 self._livescore = (moment, cached)
-        return {**cached, **socket}  # The socket is pushed per point, so it wins where both have a match.
+        merged = {**cached, **socket}
+        for key, row in socket.items():
+            polled = cached.get(key)
+            if polled is not None and progress(polled) > progress(row):
+                merged[key] = polled  # The socket row is older than the one just polled.
+        return merged
+
+    def _reference_candidates(self, live):
+        """Live set-1 events the prematch odds feed never listed and the bot has no record of.
+
+        Some matches (e.g. a final scheduled once the semi-finals ended) get no
+        prematch odds at all; without a reference no rule could follow them.
+        """
+        if not self.live_reference_enabled or not self._priced_ready:
+            return []
+        keys = [key for key, item in live.items() if key not in self._priced and key not in self._reference_done
+                and current_set({"event_status": item.status}) == 1]
+        if not keys:
+            return []
+        known = self.repo.known_keys(keys)
+        self._reference_done |= known
+        return [key for key in keys if key not in known]
+
+    def _adopt_live_references(self, live, scores, keys):
+        """Store the opening live price as the prematch reference while set 1 is at most one game old."""
+        for key in keys:
+            row, item = scores.get(key), live[key]
+            if row is None:
+                continue  # No score yet; asked again on the next scan while set 1 lasts.
+            if current_set(row) != 1:
+                self._reference_done.add(key)
+                continue
+            games = set_games(row, 1) or ((0, 0) if not row.get("scores") else None)
+            if games is None:
+                continue
+            if sum(games) > LIVE_REFERENCE_MAX_GAMES:
+                self._reference_done.add(key)
+                log.info("CANLI REFERANS | event=%s | maç önü oranı yok, 1. set %s-%s: referans için geç", key, *games)
+                continue
+            odds = PrematchOdds(key, item.home, item.away)
+            side = favorite_side(odds, self.config.prematch_min, self.config.prematch_max)
+            if side is None:
+                continue  # Waiting for both prices.
+            value = odds.home if side == "Home" else odds.away
+            is_eligible = eligible(value, self.config.prematch_min, self.config.prematch_max)
+            self.repo.upsert_prematch(key, row, odds, side, is_eligible, source="LIVE")
+            self._reference_done.add(key)
+            log.info("CANLI REFERANS | event=%s | %s vs %s | maç önü oranı yok; 1. set %s-%s canlı oranı: %s / %s | "
+                     "favori=%s | uygun=%s", key, row.get("event_first_player"), row.get("event_second_player"),
+                     *games, item.home, item.away, side, is_eligible)
 
     def _stream_coverage(self, live, socket):
         if self.stream is None:
@@ -361,7 +428,7 @@ class Monitor:
                      item.away if item.away is not None else "yok", item.home_updated_at or "yok")
 
     async def scheduled_live_scan(self):
-        if self.config.third_set_enabled or self.serve_for_set_enabled:
+        if self.config.third_set_enabled or self.serve_for_set_enabled or self.live_reference_enabled:
             await self.live_scan()
             return
         watched = self.repo.watched()

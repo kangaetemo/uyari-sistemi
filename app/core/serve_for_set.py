@@ -51,6 +51,25 @@ def set_games(fixture, number):
     return None if first is None or second is None else (first, second)
 
 
+POINT_ORDER = {"0": 0, "15": 1, "30": 2, "40": 3, "A": 4, "AD": 4}
+
+
+def progress(fixture):
+    """How far a score row has got: (set, games in that set, points in the game), for comparing two feeds.
+
+    A finished match counts as furthest along. Tie-break points are plain numbers.
+    """
+    if is_final(fixture):
+        return (99, 0, 0)
+    number = current_set(fixture) or 0
+    games = set_games(fixture, number) if number else None
+    points = 0
+    for part in str(fixture.get("event_game_result") or "").split("-"):
+        part = part.strip().upper()
+        points += POINT_ORDER.get(part, int(part) if part.isdigit() else 0)
+    return (number, sum(games) if games else 0, points)
+
+
 def player_side(value):
     return SIDE_BY_PLAYER.get(str(value or "").strip().lower())
 

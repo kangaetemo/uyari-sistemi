@@ -95,13 +95,14 @@ def connected_stream(*fixtures):
     return stream
 
 
-def test_scores_come_from_the_socket_instead_of_livescore(tmp_path):
+def test_third_set_candidate_in_the_socket_is_also_polled(tmp_path):
+    # The socket can lag behind; a third-set candidate is checked against get_livescore as well.
     repo = Repository(tmp_path / "a.db")
-    api = FakeAPI()
+    api = FakeAPI(fixture=score_fixture(status="Set 2", games=("3", "6")))  # Older than the socket's row.
     stream = connected_stream(score_fixture())
     monitor = Monitor(CONFIG, api, repo, None, stream)
     asyncio.run(monitor.live_scan())
-    assert api.score_calls == 0
+    assert api.score_calls == 1
     assert [w["favorite_side"] for w in repo.third_set_watched()] == ["Home"]
     repo.close()
 
