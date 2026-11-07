@@ -3,15 +3,16 @@
 <h1>Genel bakış</h1>
 <p class="sub">Maç sonu alarmları (maç önü favorisi, 3. set) takip edilen tarafın maçı kazanıp kazanmadığıyla ölçülür. Set kırma alarmları (set için servis) ayrı tutulur: favorinin o oyunu kırıp kırmadığı ve seti alıp almadığıyla ölçülür, maç sonu toplamına katılmaz.</p>
 <div class="filters">{% for d, label in periods %}<a href="/?days={{ d }}" class="{{ 'on' if days==d }}">{{ label }}</a>{% endfor %}</div>
+<div class="filters"><a href="#mac-sonu">Maç sonu alarmları</a><a href="#set-kirma">Set kırma alarmları{% if data.serve %} ({{ data.serve.total }}){% endif %}</a></div>
 
-<h2>Maç sonu alarmları</h2>
+<h2 id="mac-sonu">Maç sonu alarmları</h2>
 <p class="note">Kazanma oranı, takip edilen tarafın maçı kazandığı sonuçlanmış alarmların payıdır. Başabaş oranı, ortalama alarm oranında kâra geçmek için gereken kazanma oranıdır (1 / oran).</p>
 {% if data.match_rows %}
 <div class="cards">
 {% for rule in rules if rule in data.by_rule and rule not in set_rules %}
 {% with title=rule_names[rule], s=data.by_rule[rule] %}{% include "_stats_card.html" %}{% endwith %}
 {% endfor %}
-{% with title="Maç sonu toplamı", s=data.by_rule['ALL'] %}{% include "_stats_card.html" %}{% endwith %}
+{% if data.match_rule_count > 1 %}{% with title="Maç sonu toplamı", s=data.by_rule['ALL'] %}{% include "_stats_card.html" %}{% endwith %}{% endif %}
 </div>
 {% else %}
 <div class="card">Bu dönemde maç sonu alarmı yok.</div>
@@ -32,7 +33,7 @@
 {% endif %}
 <p class="note">Teorik getiri, her alarma alarm anındaki orandan 1 birim yatırılmış gibi hesaplanır; o oranın gerçekten alınabildiğini varsayar.</p>
 
-<h2>Set kırma alarmları (set için servis)</h2>
+<h2 id="set-kirma">Set kırma alarmları (set için servis)</h2>
 <p class="note">Favori bir break gerideyken rakip set için servis ettiğinde verilen alarmlar. Asıl ölçü favorinin o oyunu kırmasıdır; seti ve maçı alması ayrıca gösterilir.</p>
 {% if data.serve %}{% set v = data.serve %}
 <div class="cards">

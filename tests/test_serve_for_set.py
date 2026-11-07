@@ -259,6 +259,8 @@ def test_panel_shows_the_rule(tmp_path):
     overview = client.get("/", auth=AUTH).text
     assert "Maç sonu alarmları" in overview and "Set kırma alarmları (set için servis)" in overview
     assert "Break (o oyun)" in overview and "Aynı alarmlarda maç sonucu" in overview
+    assert 'href="#set-kirma"' in overview and 'id="set-kirma"' in overview
+    assert "Maç sonu toplamı" not in overview  # Only the prematch rule alerted; its total would repeat the card.
     listing = client.get("/alerts?rule=SERVE_FOR_SET", auth=AUTH).text
     assert "2. set 4-5" in listing and "Break yaptı" in listing and "maç: bekliyor" in listing
     # The break is the rule's own result, so the filter follows it.

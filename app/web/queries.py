@@ -91,6 +91,8 @@ def overview(conn, days):
     serve_by_type = sorted(((name, serve_report(items)) for name, items in serve_types.items()),
                            key=lambda pair: -pair[1]["total"])
     return {"rows": rows, "match_rows": match_rows, "by_rule": by_rule, "by_type": types,
+            # With a single match rule its total repeats the same card, so the panel leaves it out.
+            "match_rule_count": len({row["rule_type"] for row in match_rows}),
             "serve": serve_report(serve_rows), "serve_by_type": serve_by_type}
 
 
