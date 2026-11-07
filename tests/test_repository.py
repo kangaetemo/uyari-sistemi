@@ -19,3 +19,14 @@ def test_restart_transition_and_one_alert(tmp_path):
     assert repo.conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 1
     assert repo.conn.execute("SELECT previous_live_odds FROM alerts").fetchone()[0] == "1.95"
     repo.close()
+
+
+def test_unchanged_result_is_not_saved_again(tmp_path):
+    repo = Repository(tmp_path / "test.db")
+    fixture = {"event_first_player":"Player A","event_second_player":"Player B","event_date":"2026-11-07","event_time":"18:00"}
+    repo.upsert_prematch("1",fixture,PrematchOdds("1",Decimal("1.30"),Decimal("3")),"Home",True)
+    assert repo.save_result("1","Home","2 - 0","Finished","FINISHED")
+    assert not repo.save_result("1","Home","2 - 0","Finished","FINISHED")
+    assert repo.save_result("1","Away","1 - 2","Finished","FINISHED")
+    assert repo.conn.execute("SELECT winner_side FROM match_results").fetchone()[0] == "Away"
+    repo.close()

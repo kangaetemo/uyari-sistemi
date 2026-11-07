@@ -439,7 +439,16 @@ class Repository:
     # --- Results -------------------------------------------------------------
 
     def save_result(self, event_key, winner_side, final_result, provider_status, outcome_type):
+        """Store a match result; True only when it is new or different from the stored one.
+
+        Every prematch scan sees finished fixtures again, so an unchanged result is
+        neither rewritten nor reported as saved (that repeated the SONUÇ log every 5 minutes).
+        """
         if not self.get_match(event_key):
+            return False
+        stored = self.conn.execute("SELECT winner_side,final_result,provider_status,outcome_type FROM match_results WHERE event_key=?",
+                                   (event_key,)).fetchone()
+        if stored is not None and tuple(stored) == (winner_side, final_result, provider_status, outcome_type):
             return False
         with self.conn:
             self.conn.execute("""INSERT INTO match_results(event_key,winner_side,final_result,provider_status,outcome_type,recorded_at)
