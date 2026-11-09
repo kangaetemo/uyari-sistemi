@@ -24,14 +24,15 @@
 {% if data.by_type %}
 <h3>Maç türüne göre (maç sonu alarmları)</h3>
 <div class="scroll"><table class="table">
-<tr><th>Tür</th><th class="num">Alarm</th><th class="num">Kazandı</th><th class="num">Kaybetti</th><th class="num">Bekliyor</th><th class="num">Kazanma</th><th class="num">Başabaş</th><th class="num">Teorik getiri</th></tr>
+<tr><th>Tür</th><th class="num">Alarm</th><th class="num">Kazandı</th><th class="num">Kaybetti</th><th class="num">Bekliyor</th><th class="num">Kazanma</th><th class="num">Başabaş</th><th class="num">Teorik getiri</th><th class="num">Rakibe oynasaydık</th></tr>
 {% for name, s in data.by_type %}
 <tr><td>{{ name }}</td><td class="num">{{ s.total }}</td><td class="num">{{ s.WON }}</td><td class="num">{{ s.LOST }}</td><td class="num">{{ s.PENDING }}</td>
-<td class="num">{{ pct(s.win_rate) }}</td><td class="num">{{ pct(s.break_even) }}</td><td class="num {{ 'pos' if s.profit > 0 else 'neg' if s.profit < 0 }}">{{ signed(s.profit) }}</td></tr>
+<td class="num">{{ pct(s.win_rate) }}</td><td class="num">{{ pct(s.break_even) }}</td><td class="num {{ 'pos' if s.profit > 0 else 'neg' if s.profit < 0 }}">{{ signed(s.profit) }}</td>
+<td class="num {{ 'pos' if s.opp_profit > 0 else 'neg' if s.opp_profit < 0 }}">{{ signed(s.opp_profit) if s.opp_settled else '-' }}</td></tr>
 {% endfor %}
 </table></div>
 {% endif %}
-<p class="note">Teorik getiri, her alarma alarm anındaki orandan 1 birim yatırılmış gibi hesaplanır; o oranın gerçekten alınabildiğini varsayar.</p>
+<p class="note">Teorik getiri, her alarma alarm anındaki orandan 1 birim yatırılmış gibi hesaplanır; o oranın gerçekten alınabildiğini varsayar. "Rakibe oynasaydık" aynı alarmlarda 1 birimin diğer oyuncuya, alarm anındaki rakip oranından yatırıldığını varsayar.{% if data.opp_margin %} Rakip oranı kaydedilmemiş alarmlarda (bu özellikten önceki alarmlar) oran, favorinin alarm oranından %{{ data.opp_margin }} bahis marjı varsayılarak tahmin edilir.{% endif %}</p>
 
 <h2 id="set-kirma">Set kırma alarmları (set için servis)</h2>
 <p class="note">Favori bir break gerideyken rakip set için servis ettiğinde verilen alarmlar. Asıl ölçü favorinin o oyunu kırmasıdır; seti ve maçı alması ayrıca gösterilir.</p>
@@ -60,7 +61,7 @@
 </div>
 {% with title="Aynı alarmlarda maç sonucu", s=data.by_rule['SERVE_FOR_SET'] %}{% include "_stats_card.html" %}{% endwith %}
 </div>
-<p class="note">Alarm oranı favorinin maç oranıdır; bu yüzden teorik getiri yalnızca maç sonucu kartında hesaplanır.</p>
+<p class="note">Alarm oranı favorinin maç oranıdır; bu yüzden teorik getiri (favoriye ve rakibe oynama) yalnızca maç sonucu kartında hesaplanır.</p>
 {% else %}
 <div class="card">Bu dönemde set kırma alarmı yok.</div>
 {% endif %}

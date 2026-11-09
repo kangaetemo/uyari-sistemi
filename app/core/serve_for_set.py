@@ -201,7 +201,8 @@ async def process_serve_for_set(config, api, repo, live, *, scores=None, open_ke
         if odd is None:
             log.info("SET İÇİN SERVİS | event=%s | set=%s | favorinin canlı oranı yok; bekleniyor", key, point.set_number)
             continue
-        if repo.record_serve_for_set(match, point, odd, config.serve_for_set_favorite_max):
+        opponent = item.away if match["favorite_side"] == "Home" else item.home
+        if repo.record_serve_for_set(match, point, odd, config.serve_for_set_favorite_max, opponent):
             created += 1
             log.warning("SET İÇİN SERVİS ALARMI | event=%s | %s | set=%s | %s-%s geride | maç önü=%s | canlı=%s",
                         key, match["favorite_player_name"], point.set_number, point.receiver_games,

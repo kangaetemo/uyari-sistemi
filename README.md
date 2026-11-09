@@ -42,6 +42,8 @@ python main.py --report --days 30
 
 Rapor kural bazında kazanma oranını, ortalama alarm oranını, o orandaki başabaş kazanma oranını (1/oran) ve her alarma 1 birim yatırılmış gibi hesaplanan teorik getiriyi gösterir. Teorik getiri, alarm anındaki oranın gerçekten alınabildiğini varsayar. 100'den az sonuç olduğunda rapor bunu uyarı olarak belirtir.
 
+Her bölümde ayrıca **"Rakibe oynasaydık"** satırı vardır: aynı alarmlarda 1 birim diğer oyuncuya, alarm anındaki rakip oranından yatırılsaydı teorik getiri, ROI, ortalama rakip oranı ve başabaş oranı. Bot her alarmda rakibin canlı oranını da kaydeder (`alerts.opponent_odds`, ilk açılışta kolon otomatik eklenir). Bu özellikten önceki alarmlarda veya rakip oranı askıdaysa oran, favorinin alarm oranından %5 bahis marjı varsayılarak tahmin edilir ve rapor kaç oranın tahmini olduğunu yazar. Set kırma alarmlarında da rakip bahsi maç sonucuna göre hesaplanır.
+
 Alarmdan sonra da oran geçmişi toplanmaya devam eder: maç önü kuralında maç bitene kadar, üçüncü set kuralında set bitene kadar. Böylece grafik ve farklı eşik denemeleri için veri birikir.
 
 Feed'in kapatmadığı takipler otomatik kapanır: başlangıç saatinden `MATCH_EXPIRY_HOURS` (8) saat sonra canlıya geçmemiş maçlar ve canlı akışta `LIVE_STALE_MINUTES` (45) dakika görünmeyen maçlar `EXPIRED` olur. Bu iş ve sonuç toplama `RESULT_POLL_SECONDS` (1800) saniyede bir çalışır; elle `python main.py --collect-results` ile de tetiklenebilir.

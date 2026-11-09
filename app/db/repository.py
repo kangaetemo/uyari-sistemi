@@ -14,6 +14,10 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _text(value):
+    return str(value) if value is not None else None
+
+
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS matches (
@@ -149,6 +153,10 @@ class Repository:
             # NULL: real prematch odds. LIVE: the provider published none, the first live price stands in.
             with self.conn:
                 self.conn.execute("ALTER TABLE matches ADD COLUMN prematch_source TEXT")
+        if "opponent_odds" not in {row["name"] for row in self.conn.execute("PRAGMA table_info(alerts)")}:
+            # The other player's live price at the alert, for the "back the opponent" statistics.
+            with self.conn:
+                self.conn.execute("ALTER TABLE alerts ADD COLUMN opponent_odds TEXT")
 
     def close(self):
         self.conn.close()
@@ -223,7 +231,7 @@ class Repository:
             if closed:
                 self._close_third_set(event_key)
 
-    def record_live(self, match, odd, provider_updated_at, threshold):
+    def record_live(self, match, odd, provider_updated_at, threshold, opponent=None):
         """Store a changed live price; create the prematch alert once. History continues after the alert."""
         event_key = match["event_key"]
         stamp = now()
@@ -235,8 +243,8 @@ class Repository:
             self.conn.execute("UPDATE matches SET status=CASE WHEN status='ALERTED' THEN status ELSE 'LIVE' END,updated_at=? WHERE event_key=?", (stamp,event_key))
             if match["alerted"] or Decimal(str(odd)) < threshold:
                 return False
-            inserted = self.conn.execute("INSERT OR IGNORE INTO alerts(event_key,favorite_player_name,prematch_odds,previous_live_odds,trigger_live_odds,threshold,created_at,favorite_side,reference_odds) VALUES (?,?,?,?,?,?,?,?,?)",
-                              (event_key,match["favorite_player_name"],match["latest_prematch_odds"],previous["live_odds"] if previous else None,str(odd),str(threshold),stamp,match["favorite_side"],match["latest_prematch_odds"]))
+            inserted = self.conn.execute("INSERT OR IGNORE INTO alerts(event_key,favorite_player_name,prematch_odds,previous_live_odds,trigger_live_odds,threshold,created_at,favorite_side,reference_odds,opponent_odds) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                              (event_key,match["favorite_player_name"],match["latest_prematch_odds"],previous["live_odds"] if previous else None,str(odd),str(threshold),stamp,match["favorite_side"],match["latest_prematch_odds"],_text(opponent)))
             self.conn.execute("UPDATE matches SET alerted=1,status='ALERTED',updated_at=? WHERE event_key=?", (stamp,event_key))
             return inserted.rowcount == 1
 
@@ -339,7 +347,7 @@ class Repository:
         with self.conn:
             self._close_third_set(event_key)
 
-    def record_third_set_live(self, watch, odd, updated, threshold):
+    def record_third_set_live(self, watch, odd, updated, threshold, opponent=None):
         key, side = watch["event_key"], watch["favorite_side"]
         stamp = now()
         with self.conn:
@@ -355,9 +363,9 @@ class Repository:
             if current["status"] == "ALERTED" or odd <= threshold:
                 return False
             inserted = self.conn.execute("""INSERT OR IGNORE INTO alerts(event_key,favorite_player_name,
-                previous_live_odds,trigger_live_odds,threshold,created_at,rule_type,favorite_side,reference_odds)
-                VALUES (?,?,?,?,?,?,'THIRD_SET',?,?)""",
-                (key,watch["favorite_player_name"],previous["live_odds"] if previous else None,str(odd),str(threshold),stamp,side,watch["opening_odds"]))
+                previous_live_odds,trigger_live_odds,threshold,created_at,rule_type,favorite_side,reference_odds,opponent_odds)
+                VALUES (?,?,?,?,?,?,'THIRD_SET',?,?,?)""",
+                (key,watch["favorite_player_name"],previous["live_odds"] if previous else None,str(odd),str(threshold),stamp,side,watch["opening_odds"],_text(opponent)))
             self.conn.execute("UPDATE third_set_watches SET status='ALERTED' WHERE event_key=? AND favorite_side=?", (key,side))
             return inserted.rowcount == 1
 
@@ -401,7 +409,7 @@ class Repository:
         return self.conn.execute("SELECT 1 FROM serve_for_set WHERE event_key=? AND set_number=?",
                                  (event_key, set_number)).fetchone() is not None
 
-    def record_serve_for_set(self, match, point, odd, threshold):
+    def record_serve_for_set(self, match, point, odd, threshold, opponent=None):
         """Store the moment and create its alert, once per set."""
         key, side = match["event_key"], match["favorite_side"]
         stamp = now()
@@ -414,10 +422,10 @@ class Repository:
             if inserted.rowcount != 1:
                 return False
             self.conn.execute("""INSERT OR IGNORE INTO alerts(event_key,favorite_player_name,prematch_odds,
-                trigger_live_odds,threshold,created_at,rule_type,favorite_side,reference_odds,set_number)
-                VALUES (?,?,?,?,?,?,'SERVE_FOR_SET',?,?,?)""",
+                trigger_live_odds,threshold,created_at,rule_type,favorite_side,reference_odds,set_number,opponent_odds)
+                VALUES (?,?,?,?,?,?,'SERVE_FOR_SET',?,?,?,?)""",
                 (key, match["favorite_player_name"], match["latest_prematch_odds"], str(odd), str(threshold),
-                 stamp, side, match["latest_prematch_odds"], point.set_number))
+                 stamp, side, match["latest_prematch_odds"], point.set_number, _text(opponent)))
         return True
 
     def serve_for_set_open_keys(self, hours=6):

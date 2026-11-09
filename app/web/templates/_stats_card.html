@@ -9,6 +9,13 @@
 <span>Ortalama alarm oranı</span><span>{{ num(s.avg_odds) }}</span>
 <span>Başabaş oranı</span><span>{{ pct(s.break_even) }}</span>
 <span>Teorik getiri</span><span class="{{ 'pos' if s.profit > 0 else 'neg' if s.profit < 0 }}">{{ signed(s.profit) }} birim ({{ pct(s.roi) }})</span>
+{% if s.opp_settled %}
+<span class="kv-head">Rakibe oynasaydık</span><span class="kv-head"></span>
+<span>Ortalama rakip oranı</span><span>{{ num(s.opp_avg_odds) }}</span>
+<span>Başabaş (rakip kazanmalı)</span><span>{{ pct(s.opp_break_even) }}</span>
+<span>Teorik getiri</span><span class="{{ 'pos' if s.opp_profit > 0 else 'neg' if s.opp_profit < 0 }}">{{ signed(s.opp_profit) }} birim ({{ pct(s.opp_roi) }})</span>
+{% endif %}
 </div>
+{% if s.opp_settled and s.opp_estimated %}<div class="note">{{ s.opp_estimated }} alarmda rakip oranı kayıtlı değil, tahmini.</div>{% endif %}
 {% if s.settled and s.settled < 100 %}<div class="note warn">100'den az sonuç: oran henüz güvenilir değil.</div>{% endif %}
 </div>

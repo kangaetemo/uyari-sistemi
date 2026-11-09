@@ -18,6 +18,9 @@ MATCH_RULES = ("PREMATCH", "THIRD_SET")
 # Rules judged by the game that follows the alert (did the favourite break back?).
 SET_RULES = ("SERVE_FOR_SET",)
 BREAK_RESULTS = {"BROKE": "WON", "HELD": "LOST"}
+# Bookmaker margin assumed when an alert has no stored opponent price (alerts made
+# before alerts.opponent_odds existed, or the opponent's price was suspended).
+OPPONENT_MARGIN = Decimal("0.05")
 
 
 @dataclass(frozen=True)
@@ -87,10 +90,31 @@ def rule_outcome(row):
     return break_outcome(row) if row["rule_type"] in SET_RULES else alert_outcome(row)
 
 
+def estimate_opponent_odds(favorite_odds, margin=OPPONENT_MARGIN):
+    """The opponent's price implied by the favourite's, for a two-way market with `margin` overround."""
+    rest = 1 + margin - 1 / Decimal(favorite_odds)
+    return (1 / rest).quantize(Decimal("0.01")) if rest > 0 else None
+
+
+def opponent_odds(row):
+    """(price, estimated) of backing the other player at the alert: the stored price, else an estimate."""
+    stored = row["opponent_odds"] if "opponent_odds" in row.keys() else None
+    if stored:
+        return Decimal(stored), False
+    estimate = estimate_opponent_odds(row["trigger_live_odds"])
+    return (estimate, True) if estimate is not None else (None, False)
+
+
 def build_report(rows):
-    """Match-result counters per rule; "ALL" adds up only the match rules (MATCH_RULES)."""
+    """Match-result counters per rule; "ALL" adds up only the match rules (MATCH_RULES).
+
+    The opp_* counters replay the opposite bet: 1 unit on the other player at the
+    alert, at the opponent's price, judged by the same match result.
+    """
     stats = defaultdict(lambda: {"total": 0, "WON": 0, "LOST": 0, "PENDING": 0, "VOID": 0,
-                                 "retired": 0, "profit": Decimal(0), "odds_sum": Decimal(0)})
+                                 "retired": 0, "profit": Decimal(0), "odds_sum": Decimal(0),
+                                 "opp_settled": 0, "opp_profit": Decimal(0), "opp_odds_sum": Decimal(0),
+                                 "opp_estimated": 0})
     for row in rows:
         rules = (row["rule_type"], "ALL") if row["rule_type"] in MATCH_RULES else (row["rule_type"],)
         for rule in rules:
@@ -106,7 +130,26 @@ def build_report(rows):
                 item["profit"] += odd - 1
             elif outcome == "LOST":
                 item["profit"] -= 1
+            opp, estimated = opponent_odds(row)
+            if outcome in {"WON", "LOST"} and opp is not None:
+                item["opp_settled"] += 1
+                item["opp_odds_sum"] += opp
+                item["opp_estimated"] += estimated
+                item["opp_profit"] += opp - 1 if outcome == "LOST" else -1
     return stats
+
+
+def opponent_line(item):
+    """One report line for the opposite bet, or None when nothing is settled."""
+    if not item["opp_settled"]:
+        return None
+    avg = item["opp_odds_sum"] / item["opp_settled"]
+    line = (f"  Rakibe oynasaydık (alarm anındaki rakip oranından 1 birim): {item['opp_profit']:+.2f} birim, "
+            f"%{item['opp_profit'] / item['opp_settled'] * 100:+.1f} | ortalama rakip oranı {avg:.2f}, "
+            f"başabaş %{100 / avg:.1f}")
+    if item["opp_estimated"]:
+        line += f" | {item['opp_estimated']} oran tahmini"
+    return line
 
 
 def serve_report(rows):
@@ -156,6 +199,9 @@ def format_report(rows, days):
             lines.append(f"  Ortalama alarm oranı: {avg_odds:.2f} | Başabaş kazanma oranı: %{100 / avg_odds:.1f}")
             lines.append(f"  Teorik getiri (her alarma 1 birim, alarm oranından): {item['profit']:+.2f} birim, "
                          f"%{item['profit'] / settled * 100:+.1f}")
+            opponent = opponent_line(item)
+            if opponent:
+                lines.append(opponent)
             if item["retired"]:
                 lines.append(f"  Not: {item['retired']} sonuç maçtan çekilmeyle bitti; bahis sitelerinin kuralları farklı olabilir.")
             if settled < 100:
@@ -176,9 +222,15 @@ def format_report(rows, days):
         settled = match["WON"] + match["LOST"]
         lines.append(f"  Ayrıca maç sonucu: Kazandı: {match['WON']} | Kaybetti: {match['LOST']} | Bekliyor: {match['PENDING']}"
                      + (f" | Kazanma oranı: %{match['WON'] / settled * 100:.1f}" if settled else ""))
-        lines.append("  Not: Bu alarmlar maç sonu toplamına katılmaz; alarm oranı maç oranı olduğu için set kırmada teorik getiri hesaplanmaz.")
+        opponent = opponent_line(match)
+        if opponent:
+            lines.append(opponent)
+        lines.append("  Not: Bu alarmlar maç sonu toplamına katılmaz; alarm oranı maç oranı olduğu için teorik getiri yalnızca maç sonucuna göre hesaplanır.")
         if serve["break"]["settled"] and serve["break"]["settled"] < 100:
             lines.append("  Uyarı: 100'den az sonuç var; oran istatistiksel olarak henüz güvenilir değil.")
     lines.append("")
     lines.append("Teorik getiri, alarm anındaki oranın alınabildiğini varsayar; gerçek bahis kaydı değildir.")
+    if any(opponent_odds(row)[1] for row in rows):
+        lines.append(f"Rakip oranı kaydedilmemiş alarmlarda (bu özellikten önceki alarmlar) rakip oranı, favorinin alarm "
+                     f"oranından %{OPPONENT_MARGIN * 100:.0f} bahis marjı varsayılarak tahmin edildi.")
     return "\n".join(lines)

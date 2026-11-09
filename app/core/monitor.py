@@ -139,7 +139,8 @@ class Monitor:
                 continue
             updated = item.home_updated_at if match["favorite_side"] == "Home" else item.away_updated_at
             log.debug("LIVE | event=%s | %s | %s",key,match["favorite_player_name"],odd)
-            if self.repo.record_live(match,odd,updated,self.config.live_trigger):
+            opponent = item.away if match["favorite_side"] == "Home" else item.home
+            if self.repo.record_live(match,odd,updated,self.config.live_trigger,opponent):
                 alerted = True
                 log.warning("ALARM | %s | %s -> %s",match["favorite_player_name"],match["latest_prematch_odds"],odd)
             seen.append((key,match["favorite_player_name"],odd))

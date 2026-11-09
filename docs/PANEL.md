@@ -58,5 +58,6 @@ Varsayılan ayar paneli yalnızca sunucunun kendisine açar. Üç yol var, en g�
 
 - Kazanma oranı yalnızca sonucu belli alarmlardan hesaplanır. İptal ve walkover "geçersiz" sayılır, paydaya girmez. Maçtan çekilmeyle biten sonuçlar ayrıca işaretlenir.
 - Teorik getiri, alarm anındaki oranın gerçekten alınabildiğini varsayar. Gecikme, askıya alınan oranlar ve bahis sitesi farkları bunu düşürür.
+- Her istatistik kartında ve maç türü tablosunda **Rakibe oynasaydık** bölümü vardır: aynı alarmlarda 1 birim diğer oyuncuya, alarm anındaki rakip oranından yatırılsaydı ne olurdu. Rakip oranı kayıtlı olmayan eski alarmlarda oran, favorinin alarm oranından %5 bahis marjıyla tahmin edilir ve kartta kaç tanesinin tahmini olduğu yazar.
 - 100'den az sonuçta oranlar rastlantıya çok açıktır; panel bunu kartlarda uyarı olarak gösterir.
 - Eşik analizi yalnızca fiyat değiştiğinde kaydedilen geçmişi kullanır. Bu sürümden önce toplanan maçlarda alarmdan sonraki oranlar kayıtlı değildir.
