@@ -10,7 +10,7 @@
 <td><a href="/match/{{ m.event_key }}">{{ m.first_player_name or '?' }} – {{ m.second_player_name or '?' }}</a><br><span class="note">{{ m.tournament_name or '' }}</span></td>
 <td>{{ m.favorite_player_name or m.favorite_side }}</td>
 <td>{{ status_names.get(m.status, m.status) }}</td>
-<td class="num">{{ m.latest_prematch_odds or '-' }}</td>
+<td class="num">{{ m.latest_prematch_odds or '-' }}{% if m.prematch_source == 'LIVE' %} <span class="note" title="Maç önü oranı yoktu; 1. set başındaki canlı oran">(canlı)</span>{% endif %}</td>
 <td class="num">{{ m.last_live or '-' }}</td>
 <td>{{ local(m.last_live_at, '%H:%M:%S') }}</td>
 </tr>

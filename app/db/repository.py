@@ -145,6 +145,10 @@ class Repository:
             # e.g. "Atp Singles", "Itf Men Singles"; lets the panel split statistics by level.
             with self.conn:
                 self.conn.execute("ALTER TABLE matches ADD COLUMN event_type TEXT")
+        if "prematch_source" not in columns:
+            # NULL: real prematch odds. LIVE: the provider published none, the first live price stands in.
+            with self.conn:
+                self.conn.execute("ALTER TABLE matches ADD COLUMN prematch_source TEXT")
 
     def close(self):
         self.conn.close()
@@ -161,7 +165,16 @@ class Repository:
     def get_match(self, event_key):
         return self.conn.execute("SELECT * FROM matches WHERE event_key=?", (event_key,)).fetchone()
 
-    def upsert_prematch(self, event_key, fixture, odds, side, eligible):
+    def known_keys(self, event_keys):
+        keys, found = [str(key) for key in event_keys], set()
+        for start in range(0, len(keys), 500):
+            chunk = keys[start:start + 500]
+            found |= {row[0] for row in self.conn.execute(
+                f"SELECT event_key FROM matches WHERE event_key IN ({','.join('?' * len(chunk))})", chunk)}
+        return found
+
+    def upsert_prematch(self, event_key, fixture, odds, side, eligible, source=None):
+        """Store the prematch reference; `source="LIVE"` marks a first live price used because none was published."""
         old = self.get_match(event_key)
         if old and old["status"] in {"LIVE", "ALERTED"} | CLOSED_STATUSES:
             return
@@ -183,8 +196,8 @@ class Repository:
                 event_key,first_player_key,second_player_key,first_player_name,second_player_name,
                 tournament_name,tournament_key,favorite_player_key,favorite_player_name,favorite_side,
                 first_seen_prematch_odds,latest_prematch_odds,first_seen_at,prematch_updated_at,
-                match_start_time,status,is_watched,created_at,updated_at,event_type)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                match_start_time,status,is_watched,created_at,updated_at,event_type,prematch_source)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(event_key) DO UPDATE SET
                 first_player_name=excluded.first_player_name,second_player_name=excluded.second_player_name,
                 tournament_name=excluded.tournament_name,favorite_player_key=excluded.favorite_player_key,
@@ -192,12 +205,13 @@ class Repository:
                 latest_prematch_odds=excluded.latest_prematch_odds,prematch_updated_at=excluded.prematch_updated_at,
                 match_start_time=excluded.match_start_time,
                 event_type=COALESCE(excluded.event_type,matches.event_type),
-                status=excluded.status,is_watched=excluded.is_watched,updated_at=excluded.updated_at""",
+                status=excluded.status,is_watched=excluded.is_watched,updated_at=excluded.updated_at,
+                prematch_source=excluded.prematch_source""",
                 (event_key,str(first_key or ""),str(second_key or ""),first_name,second_name,
                  fixture.get("tournament_name"),str(fixture.get("tournament_key") or ""),str(player_key or ""),player_name,side,
                  str(value),str(value),stamp,stamp,
                  f"{fixture.get('event_date','')}T{fixture.get('event_time','')}",status,int(eligible),stamp,stamp,
-                 fixture.get("event_type_type")))
+                 fixture.get("event_type_type"),source))
             if not old or old["latest_prematch_odds"] != str(value):
                 self.conn.execute("INSERT INTO prematch_odds_history(event_key,home_median,away_median,favorite_side,favorite_odds,observed_at) VALUES (?,?,?,?,?,?)",
                                   (event_key,str(odds.home) if odds.home else None,str(odds.away) if odds.away else None,side,str(value),stamp))
@@ -228,7 +242,7 @@ class Repository:
 
     def pending_alerts(self):
         return self.conn.execute("""SELECT a.*,m.first_player_name,m.second_player_name,m.tournament_name,
-            s.favorite_games,s.opponent_games,s.game_result
+            m.prematch_source,s.favorite_games,s.opponent_games,s.game_result
             FROM alerts a JOIN matches m USING(event_key)
             LEFT JOIN serve_for_set s ON a.rule_type='SERVE_FOR_SET' AND s.event_key=a.event_key AND s.set_number=a.set_number
             WHERE a.telegram_sent=0 AND a.attempts<? AND (a.next_attempt_at IS NULL OR a.next_attempt_at<=?)""", (MAX_ALERT_ATTEMPTS,now())).fetchall()
@@ -439,7 +453,16 @@ class Repository:
     # --- Results -------------------------------------------------------------
 
     def save_result(self, event_key, winner_side, final_result, provider_status, outcome_type):
+        """Store a match result; True only when it is new or different from the stored one.
+
+        Every prematch scan sees finished fixtures again, so an unchanged result is
+        neither rewritten nor reported as saved (that repeated the SONUÇ log every 5 minutes).
+        """
         if not self.get_match(event_key):
+            return False
+        stored = self.conn.execute("SELECT winner_side,final_result,provider_status,outcome_type FROM match_results WHERE event_key=?",
+                                   (event_key,)).fetchone()
+        if stored is not None and tuple(stored) == (winner_side, final_result, provider_status, outcome_type):
             return False
         with self.conn:
             self.conn.execute("""INSERT INTO match_results(event_key,winner_side,final_result,provider_status,outcome_type,recorded_at)

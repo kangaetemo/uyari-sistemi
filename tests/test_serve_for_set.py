@@ -19,10 +19,22 @@ from app.notifications.telegram import format_alert
 from app.web import queries
 from app.web.server import create_app
 from tests.test_live_stream import connected_stream
-from tests.test_third_set import CONFIG, FakeAPI, live_payload
+from tests.test_third_set import CONFIG, FakeAPI as ThirdSetAPI, live_payload
 
 CONFIG_ON = SimpleNamespace(**vars(CONFIG), serve_for_set_enabled=True, serve_for_set_favorite_max=Decimal("1.35"))
 AUTH = ("admin", "secret-pass")
+
+
+class FakeAPI(ThirdSetAPI):
+    """get_livescore returns only the fixture a test gives it, so the socket's row is the only score by default."""
+
+    def __init__(self, fixture=None, payload=None):
+        super().__init__(fixture, payload)
+        self.fixture = fixture
+
+    async def livescore(self):
+        self.score_calls += 1
+        return {"success": 1, "result": [self.fixture] if self.fixture else []}
 
 
 def games(number, first, second):
@@ -109,7 +121,7 @@ def test_alert_once_per_set_with_live_odds_and_message(tmp_path):
     rows = serve_alerts(repo)
     assert [(r["set_number"], r["favorite_side"], r["trigger_live_odds"], r["reference_odds"]) for r in rows] == \
         [(2, "Home", "2.60", "1.20")]
-    assert api.score_calls == 0
+    assert api.score_calls == 1  # A live heavy favourite is always checked against get_livescore too.
     stored = repo.conn.execute("SELECT * FROM serve_for_set").fetchone()
     assert (stored["favorite_games"], stored["opponent_games"], stored["game_result"]) == (4, 5, "0 - 0")
     text = format_alert(next(a for a in repo.pending_alerts() if a["rule_type"] == "SERVE_FOR_SET"), CONFIG.timezone)
@@ -354,3 +366,26 @@ def test_break_and_set_outcomes(game, set_result, outcome_type, expected):
     row = {"rule_type": "SERVE_FOR_SET", "game_outcome": game, "set_outcome": set_result, "outcome_type": outcome_type}
     assert (break_outcome(row), set_outcome(row)) == expected
     assert rule_outcome(row) == expected[0]
+
+
+@pytest.mark.parametrize("socket_score,polled_score", [((4, 4), (4, 5)), ((4, 5), (4, 4))])
+def test_the_more_advanced_score_wins(tmp_path, socket_score, polled_score):
+    # The socket can lag a minute behind get_livescore (and the other way round); the later row counts.
+    repo = Repository(tmp_path / "a.db")
+    favorite_match(repo)
+    serve = lambda score: "Second Player" if score == (4, 5) else "First Player"
+    api = FakeAPI(fixture=fixture(polled_score, serve=serve(polled_score), points="15 - 0"),
+                  payload=live_payload(home="2.60", status="Set 2"))
+    run_scan(repo, connected_stream(fixture(socket_score, serve=serve(socket_score), points="15 - 0")), api)
+    assert api.score_calls == 1 and [r["set_number"] for r in serve_alerts(repo)] == [2]
+    repo.close()
+
+
+def test_equal_scores_keep_the_socket_row(tmp_path):
+    repo = Repository(tmp_path / "a.db")
+    favorite_match(repo)
+    api = FakeAPI(fixture=fixture((4, 5), serve="First Player", last_served="First Player"),  # Contradictory: no alert.
+                  payload=live_payload(home="2.60", status="Set 2"))
+    run_scan(repo, connected_stream(fixture((4, 5))), api)
+    assert len(serve_alerts(repo)) == 1
+    repo.close()

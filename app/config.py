@@ -33,6 +33,7 @@ class Config:
     websocket_enabled: bool = True
     serve_for_set_enabled: bool = True
     serve_for_set_favorite_max: Decimal = Decimal("1.35")
+    live_reference_enabled: bool = True
 
 
 def parse_decimal(name, value):
@@ -85,6 +86,7 @@ def load_config(*, test_telegram: bool = False, require_api: bool = True) -> Con
         websocket_enabled=os.getenv("WEBSOCKET_ENABLED", "true").lower() in {"1", "true", "yes"},
         serve_for_set_enabled=os.getenv("SERVE_FOR_SET_ENABLED", "true").lower() in {"1", "true", "yes"},
         serve_for_set_favorite_max=decimal("SERVE_FOR_SET_FAVORITE_MAX", "1.35"),
+        live_reference_enabled=os.getenv("LIVE_REFERENCE_ENABLED", "true").lower() in {"1", "true", "yes"},
     )
     if require_api and not test_telegram and not config.api_key:
         raise ValueError("API_TENNIS_KEY .env içinde gerekli")

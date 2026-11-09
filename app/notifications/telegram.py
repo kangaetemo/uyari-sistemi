@@ -34,6 +34,12 @@ class Telegram:
             return None
 
 
+def prematch_line(alert, clean):
+    live = "prematch_source" in alert.keys() and alert["prematch_source"] == "LIVE"
+    note = " (maç önü oranı yoktu; 1. set başındaki canlı oran)" if live else ""
+    return f"📉 Maç önü: {clean(alert['prematch_odds'])}{note}\n"
+
+
 def format_alert(alert, timezone):
     from datetime import datetime
     clean = lambda value: html.escape(str(value or "Bilinmiyor"))
@@ -42,7 +48,7 @@ def format_alert(alert, timezone):
         return format_serve_for_set(alert, clean, local_time)
     third_set = "rule_type" in alert.keys() and alert["rule_type"] == "THIRD_SET"
     reference = (f"📉 3. set başlangıcı: {clean(alert['reference_odds'])}\n" if third_set
-                 else f"📉 Maç önü: {clean(alert['prematch_odds'])}\n")
+                 else prematch_line(alert, clean))
     rule = "📋 Kural: 3. set başlangıcı → canlı oran artışı\n" if third_set else ""
     return ("🚨 <b>TENİS ORAN ALARMI</b>\n\n"
             f"{rule}"
@@ -71,6 +77,6 @@ def format_serve_for_set(alert, clean, local_time):
             f"🔢 {clean(alert['set_number'])}. set: {clean(games)} geride | servis: {clean(opponent)}"
             f"{f' | oyun: {clean(points)}' if points else ''}\n"
             "🎯 Seti kurtarmak için bu oyunu kırmalı\n"
-            f"📉 Maç önü: {clean(alert['prematch_odds'])}\n"
+            f"{prematch_line(alert, clean)}"
             f"📈 Canlı oran: {clean(alert['trigger_live_odds'])}\n"
             f"⏱ {local_time}\n🆔 Event: {clean(alert['event_key'])}")

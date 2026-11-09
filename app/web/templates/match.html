@@ -14,7 +14,8 @@
 <div class="card"><h3>Maç önü</h3><div class="kv">
 <span>Takip edilen</span><span>{{ m.favorite_player_name or '-' }} ({{ m.favorite_side or '-' }})</span>
 <span>İlk görülen</span><span>{{ m.first_seen_prematch_odds or '-' }}</span>
-<span>Son</span><span>{{ m.latest_prematch_odds or '-' }}</span></div></div>
+<span>Son</span><span>{{ m.latest_prematch_odds or '-' }}</span>{% if m.prematch_source == 'LIVE' %}
+<span>Kaynak</span><span>Maç önü oranı yoktu; 1. set başındaki canlı oran</span>{% endif %}</div></div>
 {% for a in detail.alerts %}
 <div class="card"><h3>Alarm: {{ rule_names.get(a.rule_type, a.rule_type) }}</h3><div class="kv">
 <span>Zaman</span><span>{{ local(a.created_at, '%d.%m %H:%M:%S') }}</span>
