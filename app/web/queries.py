@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from app.api.live_stream import is_final
-from app.core.results import MATCH_RULES, SET_RULES, alert_outcome, break_outcome, build_report, parse_result, rule_outcome, serve_report
+from app.core.results import MATCH_RULES, OPPONENT_MARGIN, SET_RULES, alert_outcome, break_outcome, build_report, parse_result, rule_outcome, serve_report
 
 ANALYSIS_RULES = ("PREMATCH", "THIRD_SET")  # Rules with an odds threshold to replay.
 PREMATCH_THRESHOLDS = [Decimal(x) for x in ("1.60", "1.70", "1.80", "1.90", "2.00", "2.10", "2.20", "2.40", "2.60", "2.80", "3.00")]
@@ -58,6 +58,7 @@ def summarize(stats):
     for rule, item in stats.items():
         settled = item["WON"] + item["LOST"]
         avg = item["odds_sum"] / item["total"] if item["total"] else None
+        opp_avg = item["opp_odds_sum"] / item["opp_settled"] if item["opp_settled"] else None
         out[rule] = {
             **{k: item[k] for k in ("total", "WON", "LOST", "PENDING", "VOID", "retired")},
             "settled": settled,
@@ -66,6 +67,13 @@ def summarize(stats):
             "break_even": 100 / avg if avg else None,
             "profit": item["profit"],
             "roi": item["profit"] / settled * 100 if settled else None,
+            # Backing the other player at each alert instead (see build_report).
+            "opp_settled": item["opp_settled"],
+            "opp_profit": item["opp_profit"],
+            "opp_roi": item["opp_profit"] / item["opp_settled"] * 100 if item["opp_settled"] else None,
+            "opp_avg_odds": opp_avg,
+            "opp_break_even": 100 / opp_avg if opp_avg else None,
+            "opp_estimated": item["opp_estimated"],
         }
     return out
 
@@ -93,7 +101,9 @@ def overview(conn, days):
     return {"rows": rows, "match_rows": match_rows, "by_rule": by_rule, "by_type": types,
             # With a single match rule its total repeats the same card, so the panel leaves it out.
             "match_rule_count": len({row["rule_type"] for row in match_rows}),
-            "serve": serve_report(serve_rows), "serve_by_type": serve_by_type}
+            "serve": serve_report(serve_rows), "serve_by_type": serve_by_type,
+            # Shown in the note only when some opponent price had to be estimated.
+            "opp_margin": f"{OPPONENT_MARGIN * 100:.0f}" if any(item["opp_estimated"] for item in by_rule.values()) else None}
 
 
 def daily_counts(rows, tz, days=30):

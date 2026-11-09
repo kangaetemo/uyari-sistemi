@@ -147,7 +147,8 @@ async def process_third_set(config, api, repo, live, *, clock, scores=None):
         odd, updated = (item.home,item.home_updated_at) if side == "Home" else (item.away,item.away_updated_at)
         if odd is None or not clock.fresh(updated,max_age):
             continue
-        if repo.record_third_set_live(watch,odd,updated,config.third_set_trigger):
+        opponent = item.away if side == "Home" else item.home
+        if repo.record_third_set_live(watch,odd,updated,config.third_set_trigger,opponent):
             created += 1
             log.warning("3. SET ALARMI | event=%s | taraf=%s | %s -> %s",
                         watch["event_key"],side,watch["opening_odds"],odd)
