@@ -6,7 +6,7 @@ API-Tennis maç önü `Home/Away` oranlarının bookmaker medyanını izler. Ma�
 
 Ek kural: üçüncü setin başında maç kazanma (`To Win`) oranı **1.30–1.60 dahil** olan taraf ayrıca izlenir. Aynı üçüncü sette oranı **2.00'nin üstüne** çıkarsa Telegram alarmı üretilir. 2.00 bu kuralı tetiklemez. Önceden prematch favorisi olması gerekmez. Her kural/taraf için ayrı bir alarm tutulur; prematch alarmı üçüncü set alarmını engellemez.
 
-Başlangıç, `get_livescore` yanıtındaki `Set 3`, üçüncü set oyunlarının 0–0 olması ve mevcut oyunun puanlarının 0–0 olmasıyla doğrulanır. Canlı oran da en fazla 30 saniyelik güncel, askıya alınmamış bir snapshot olmalıdır. Güncellik, sağlayıcının saat dilimine bağlı kalmamak için `upd` değerinin aynı yanıttaki en yeni `upd` ile karşılaştırılmasıyla ölçülür; yanıtların tamamı 30 saniyeden uzun süre ilerlemezse akış durmuş sayılır. İki taraftan biri askıda veya eskiyse karar bir sonraki taramaya bırakılır. İlk uygun başlangıç gözlemindeki oran sabitlenir; sonradan aralığa giren taraf eklenmez. Program setin ortasında açılırsa veya başlangıç sırasında veri alınamazsa o maç için bu kural atlanır. API'nin gecikmesi ve polling aralığı nedeniyle her set başlangıcını yakalamak garanti değildir. Dördüncü sete geçen, biten veya iptal edilen maçta üçüncü set takibi sona erer.
+Başlangıç, skor yanıtındaki `Set 3` ve üçüncü setin **ilk oyununun henüz bitmemiş** olmasıyla (oyunlar 0–0) doğrulanır. İlk oyunun içindeki puan (15-0, 30-15 gibi) artık önemli değil: skor ve oran akışları birbirinden birkaç saniye geride kaldığı için puanın tam 0–0 olduğu an ile kullanılabilir oran neredeyse hiç aynı taramaya denk gelmiyordu ve bütün 3. setler "kaçırıldı" sayılıyordu. Başlangıç oranı askıya alınmamış olmalı ve en fazla `THIRD_SET_OPENING_MAX_AGE_SECONDS` (300) saniye eski olabilir: set arasında (120 sn) oran çoğu zaman hiç değişmez, bu yüzden eskiden kullanılan 30 saniyelik sınır başlangıcı her seferinde ilk sayıdan sonraya itiyordu. Oran akışının tamamı 30 saniyeden uzun süre ilerlemezse akış durmuş sayılır ve beklenir. İki taraftan biri askıda veya eskiyse karar bir sonraki taramaya bırakılır. İlk uygun başlangıç gözlemindeki oran sabitlenir; sonradan aralığa giren taraf eklenmez. Her kararın skoru ve oranları `third_set_sessions.detail` kolonuna yazılır. Program setin ortasında açılırsa veya başlangıç sırasında veri alınamazsa o maç için bu kural atlanır. API'nin gecikmesi ve polling aralığı nedeniyle her set başlangıcını yakalamak garanti değildir. Dördüncü sete geçen, biten veya iptal edilen maçta üçüncü set takibi sona erer.
 
 `THIRD_SET_ENABLED=true` varsayılandır; `.env` değişikliği yapmadan yeni kural etkinleşir. `THIRD_SET_MIN`, `THIRD_SET_MAX`, `THIRD_SET_TRIGGER` ve `THIRD_SET_ODDS_MAX_AGE_SECONDS` ile ayarlanır. Bu kural açıkken prematch watchlist boş olsa da bütün canlı oranlar her canlı polling aralığında sorgulanır. Henüz başlangıç kararı verilmemiş üçüncü set event'leri varsa ayrıca **tek toplu** canlı skor çağrısı yapılır. `THIRD_SET_ENABLED=false` ile önceki polling davranışına dönülür.
 
@@ -43,6 +43,17 @@ python main.py --report --days 30
 Rapor kural bazında kazanma oranını, ortalama alarm oranını, o orandaki başabaş kazanma oranını (1/oran) ve her alarma 1 birim yatırılmış gibi hesaplanan teorik getiriyi gösterir. Teorik getiri, alarm anındaki oranın gerçekten alınabildiğini varsayar. 100'den az sonuç olduğunda rapor bunu uyarı olarak belirtir.
 
 Her bölümde ayrıca **"Rakibe oynasaydık"** satırı vardır: aynı alarmlarda 1 birim diğer oyuncuya, alarm anındaki rakip oranından yatırılsaydı teorik getiri, ROI, ortalama rakip oranı ve başabaş oranı. Bot her alarmda rakibin canlı oranını da kaydeder (`alerts.opponent_odds`, ilk açılışta kolon otomatik eklenir). Bu özellikten önceki alarmlarda veya rakip oranı askıdaysa oran, favorinin alarm oranından %5 bahis marjı varsayılarak tahmin edilir ve rapor kaç oranın tahmini olduğunu yazar. Set kırma alarmlarında da rakip bahsi maç sonucuna göre hesaplanır.
+
+### Günlük teşhis
+
+"Bugün neden alarm gelmedi?" sorusu için yalnızca veritabanını okuyan bir özet vardır (API çağrısı yapmaz, servis çalışırken de kullanılabilir):
+
+```bash
+cd /opt/uyari-sistemi && sudo -u tennis .venv/bin/python main.py --teshis          # bugün
+cd /opt/uyari-sistemi && sudo -u tennis .venv/bin/python main.py --teshis --gun 2026-11-09
+```
+
+Çıktıda botun son canlı taramasının ne kadar önce olduğu, günün alarmları ve Telegram'a gidip gitmedikleri, maç önü uygun favoriler ve canlıda ulaştıkları en yüksek oran (eşiğe ne kadar yaklaştıkları), 3. set kararları (`CAPTURED`/`MISSED`, karar anındaki skor ve oranlar) ve set için servis alarm anları bulunur.
 
 Alarmdan sonra da oran geçmişi toplanmaya devam eder: maç önü kuralında maç bitene kadar, üçüncü set kuralında set bitene kadar. Böylece grafik ve farklı eşik denemeleri için veri birikir.
 

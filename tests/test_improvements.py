@@ -50,7 +50,7 @@ def test_stalled_feed_is_not_fresh():
 def test_one_stale_side_delays_the_decision_instead_of_dropping_it(tmp_path):
     repo = Repository(tmp_path / "a.db")
     payload = live_payload(home="2.80", away="1.45")
-    payload["result"]["77"]["live_odds"][1]["upd"] = "2026-10-04 19:59:00"  # Away 60 s behind the feed.
+    payload["result"]["77"]["live_odds"][1]["upd"] = "2026-10-04 19:54:00"  # Away 6 min behind the feed.
     process(repo, payload)
     assert not repo.third_set_decided("77")
     process(repo, live_payload(home="2.80", away="1.45", updated="2026-10-04 20:00:05", feed_updated="2026-10-04 20:00:05"))
@@ -59,11 +59,9 @@ def test_one_stale_side_delays_the_decision_instead_of_dropping_it(tmp_path):
     repo.close()
 
 
-def test_feed_disagreement_waits_instead_of_missing(tmp_path):
+def test_point_disagreement_between_feeds_does_not_block_the_opening(tmp_path):
     repo = Repository(tmp_path / "a.db")
-    process(repo, live_payload(points="15 - 0"))  # Livescore still says 0-0.
-    assert not repo.third_set_decided("77")
-    process(repo)
+    process(repo, live_payload(points="15 - 0"))  # Livescore still says 0-0; both are in the first game.
     assert len(repo.third_set_watched()) == 1
     repo.close()
 

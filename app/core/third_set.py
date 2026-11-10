@@ -8,6 +8,8 @@ from app.core.rules import eligible
 
 log = logging.getLogger(__name__)
 UPD_FORMAT = "%Y-%m-%d %H:%M:%S"
+# The set break is 120 s; an unchanged opening price can be this old.
+OPENING_MAX_AGE_SECONDS = 300
 
 
 def is_third_set(status):
@@ -25,25 +27,49 @@ def zero_score(value):
     return isinstance(value, str) and value.replace(" ", "") == "0-0"
 
 
-def opening_score(fixture):
-    """Return True at the opening, False after play, None with insufficient data."""
-    if not is_third_set(str(fixture.get("event_status") or "")):
-        return None
+def third_set_games(fixture):
+    """Games of set 3 as (first, second), (0, 0) before its first game ends, None without scores.
+
+    The provider adds the set-3 row only once that set has a score; while the
+    status already says `Set 3` and both earlier sets are listed, no game of
+    set 3 has finished yet.
+    """
     scores = fixture.get("scores")
     if not isinstance(scores, list):
         return None
-    third = [s for s in scores if isinstance(s, dict) and str(s.get("score_set")) == "3"]
-    if len(third) != 1:
+    rows = [s for s in scores if isinstance(s, dict)]
+    third = [s for s in rows if str(s.get("score_set")) == "3"]
+    if len(third) > 1:
         return None
-    score = third[0]
-    if score.get("score_first") is None or score.get("score_second") is None:
+    if not third:
+        earlier = {str(s.get("score_set")) for s in rows}
+        return (0, 0) if {"1", "2"} <= earlier else None
+    try:
+        return int(str(third[0].get("score_first"))), int(str(third[0].get("score_second")))
+    except (TypeError, ValueError):
         return None
-    if str(score["score_first"]) != "0" or str(score["score_second"]) != "0":
-        return False
-    points = fixture.get("event_game_result")
-    if not isinstance(points, str) or points.strip() in {"", "-"}:
+
+
+def opening_score(fixture):
+    """True while set 3 is in its first game, False once a game of it has finished, None with insufficient data.
+
+    Points inside the first game are not required to be 0-0: the provider's
+    score and odds feeds lag behind each other by several seconds, so a 0-0
+    point snapshot with a usable price almost never coincided and every third
+    set used to be marked as missed.
+    """
+    if not is_third_set(str(fixture.get("event_status") or "")):
         return None
-    return zero_score(points)
+    games = third_set_games(fixture)
+    if games is None:
+        return None
+    return games == (0, 0)
+
+
+def describe(fixture):
+    games = third_set_games(fixture)
+    sets = f"{games[0]}-{games[1]}" if games else "?"
+    return f"3. set {sets}, puan {fixture.get('event_game_result') or '-'}"
 
 
 def parse_upd(value):
@@ -87,6 +113,10 @@ class FeedClock:
             return False  # The whole feed stopped moving.
         return (self.newest - stamp).total_seconds() <= max_age
 
+    def alive(self, max_age):
+        """The feed as a whole moved within `max_age` seconds."""
+        return self.advanced_at is not None and self._monotonic() - self.advanced_at <= max_age
+
 
 async def process_third_set(config, api, repo, live, *, clock, scores=None):
     """Capture new third-set openings and follow open watches; returns the number of new alerts.
@@ -97,6 +127,7 @@ async def process_third_set(config, api, repo, live, *, clock, scores=None):
     clock.observe(live)
     created = 0
     max_age = config.third_set_odds_max_age_seconds
+    opening_age = getattr(config, "third_set_opening_max_age_seconds", OPENING_MAX_AGE_SECONDS)
     candidates = {key:item for key,item in live.items()
                   if is_third_set(item.status) and not repo.third_set_decided(key)}
     if candidates:
@@ -113,24 +144,27 @@ async def process_third_set(config, api, repo, live, *, clock, scores=None):
                 continue
             opening = opening_score(fixture)
             if opening is False:
-                repo.decide_third_set(key, fixture, "MISSED")
-                log.info("3. SET | event=%s | başlangıç kaçırıldı; takip açılmadı", key)
+                repo.decide_third_set(key, fixture, "MISSED", detail=describe(fixture))
+                log.info("3. SET | event=%s | başlangıç kaçırıldı (%s); takip açılmadı", key, describe(fixture))
                 continue
             if opening is not True:
                 continue
-            if item.game_score and not zero_score(item.game_score):
-                # The two feeds disagree; the next poll settles which one lagged.
-                log.info("3. SET | event=%s | skor ve oran akışı uyuşmuyor; bekleniyor", key)
+            if not clock.alive(max_age):
+                log.info("3. SET | event=%s | oran akışı durmuş; bekleniyor", key)
                 continue
+            # A price that has not moved since set 2 ended is still the opening price; only a
+            # suspended side or one older than the set break is waited for.
             sides = (("Home",item.home,item.home_updated_at),("Away",item.away,item.away_updated_at))
-            stale = [side for side,odd,updated in sides if odd is None or not clock.fresh(updated,max_age)]
+            stale = [side for side,odd,updated in sides if odd is None or not clock.fresh(updated,opening_age)]
             if stale:
                 # Deciding with one side stale or suspended would drop it for good.
-                log.info("3. SET | event=%s | başlangıç oranı güncel değil (%s); bekleniyor", key, ",".join(stale))
+                log.info("3. SET | event=%s | başlangıç oranı yok/eski (%s); bekleniyor", key, ",".join(stale))
                 continue
             watches = {side:(odd,updated) for side,odd,updated in sides
                        if eligible(odd,config.third_set_min,config.third_set_max)}
-            repo.decide_third_set(key,fixture,"CAPTURED",watches)
+            detail = f"{describe(fixture)}, oran {item.home}/{item.away}"
+            repo.decide_third_set(key,fixture,"CAPTURED",watches,detail=detail)
+            log.info("3. SET BAŞLANGIÇ | event=%s | %s | takip=%s", key, detail, ",".join(watches) or "yok")
             for side,(odd,_) in watches.items():
                 log.info("3. SET TAKİP | event=%s | taraf=%s | başlangıç=%s",key,side,odd)
 

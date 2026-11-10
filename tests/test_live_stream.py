@@ -128,7 +128,7 @@ def test_third_set_opening_wakes_the_live_loop(tmp_path):
         task = asyncio.create_task(monitor.live_loop(3600))
         await asyncio.sleep(0.05)
         first = api.live_calls
-        stream.handle(json.dumps(score_fixture(points="15 - 0")))  # Not an opening: no wake-up.
+        stream.handle(json.dumps(score_fixture(games=("1","0"))))  # Not an opening: no wake-up.
         await asyncio.sleep(0.05)
         unchanged = api.live_calls
         stream.handle(json.dumps(score_fixture()))                  # 0-0 in set 3: scan now.

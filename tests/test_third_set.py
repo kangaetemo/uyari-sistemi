@@ -106,17 +106,57 @@ def test_opening_outside_range_cannot_enter_later(tmp_path,home):
     repo.close()
 
 
-@pytest.mark.parametrize("fixture", [score_fixture(points="15 - 0"),score_fixture(games=("4","3"))])
+@pytest.mark.parametrize("fixture", [score_fixture(games=("1","0")),score_fixture(games=("4","3"))])
 def test_late_start_cannot_be_captured(tmp_path,fixture):
     repo = Repository(tmp_path / "a.db")
     process(repo,fixture=fixture)
     process(repo)  # Regressing provider scores must not re-open a missed start.
     assert not repo.third_set_watched()
-    assert repo.conn.execute("SELECT decision FROM third_set_sessions").fetchone()[0] == "MISSED"
+    row = repo.conn.execute("SELECT decision,detail FROM third_set_sessions").fetchone()
+    assert row["decision"] == "MISSED" and row["detail"].startswith(f"3. set {fixture['scores'][2]['score_first']}-")
     repo.close()
 
 
-@pytest.mark.parametrize("payload", [live_payload(suspended="Yes"),live_payload(updated="2026-10-04 19:58:00"),live_payload(updated="bad")])
+@pytest.mark.parametrize("points", ["15 - 0","40 - 30","-"])
+def test_first_game_in_progress_is_still_the_opening(tmp_path,points):
+    """The score and odds feeds lag each other; a 0-0 point snapshot practically never lined up."""
+    repo = Repository(tmp_path / "a.db")
+    process(repo,live_payload(points=points),fixture=score_fixture(points=points))
+    watches = repo.third_set_watched()
+    assert len(watches) == 1 and watches[0]["opening_odds"] == "1.40"
+    detail = repo.conn.execute("SELECT detail FROM third_set_sessions").fetchone()[0]
+    assert detail == f"3. set 0-0, puan {points}, oran 1.40/3.00"
+    repo.close()
+
+
+def test_set_three_without_its_own_score_row_is_the_opening(tmp_path):
+    repo = Repository(tmp_path / "a.db")
+    fixture = score_fixture()
+    fixture["scores"] = fixture["scores"][:2]
+    process(repo,fixture=fixture)
+    assert len(repo.third_set_watched()) == 1
+    repo.close()
+
+
+def test_price_unchanged_through_the_set_break_is_the_opening(tmp_path):
+    """The To Win price often does not move during the 120 s set break; its upd stays old."""
+    repo = Repository(tmp_path / "a.db")
+    process(repo,live_payload(updated="2026-10-04 19:57:30"))
+    assert len(repo.third_set_watched()) == 1
+    repo.close()
+
+
+def test_stalled_feed_does_not_capture(tmp_path):
+    repo = Repository(tmp_path / "a.db")
+    clock = clock_for(repo)
+    clock.observe(parse_live_odds(live_payload()))
+    clock._monotonic.now += 120  # Nothing in the whole feed moved for two minutes.
+    process(repo)
+    assert not repo.third_set_decided("77")
+    repo.close()
+
+
+@pytest.mark.parametrize("payload", [live_payload(suspended="Yes"),live_payload(updated="2026-10-04 19:54:00"),live_payload(updated="bad")])
 def test_invalid_opening_odds_not_captured(tmp_path,payload):
     repo = Repository(tmp_path / "a.db")
     process(repo,payload)
