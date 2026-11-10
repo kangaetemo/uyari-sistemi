@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE TABLE IF NOT EXISTS third_set_sessions (
  event_key TEXT PRIMARY KEY REFERENCES matches(event_key), decision TEXT NOT NULL,
- observed_at TEXT NOT NULL
+ observed_at TEXT NOT NULL, detail TEXT
 );
 CREATE TABLE IF NOT EXISTS third_set_watches (
  event_key TEXT NOT NULL REFERENCES matches(event_key), favorite_side TEXT NOT NULL,
@@ -157,6 +157,10 @@ class Repository:
             # The other player's live price at the alert, for the "back the opponent" statistics.
             with self.conn:
                 self.conn.execute("ALTER TABLE alerts ADD COLUMN opponent_odds TEXT")
+        if "detail" not in {row["name"] for row in self.conn.execute("PRAGMA table_info(third_set_sessions)")}:
+            # The score (and prices) seen when the third-set opening was judged.
+            with self.conn:
+                self.conn.execute("ALTER TABLE third_set_sessions ADD COLUMN detail TEXT")
 
     def close(self):
         self.conn.close()
@@ -318,7 +322,7 @@ class Repository:
         """Watches whose odds history is collected: still watching, or alerted but the set is not over."""
         return self.conn.execute("SELECT * FROM third_set_watches WHERE status IN ('WATCHING','ALERTED')").fetchall()
 
-    def decide_third_set(self, event_key, fixture, decision, watches=None):
+    def decide_third_set(self, event_key, fixture, decision, watches=None, detail=None):
         stamp = now()
         with self.conn:
             self.conn.execute("""INSERT INTO matches(event_key,first_player_key,second_player_key,
@@ -331,7 +335,7 @@ class Repository:
                 (event_key,str(fixture.get("first_player_key") or ""),str(fixture.get("second_player_key") or ""),
                  fixture.get("event_first_player"),fixture.get("event_second_player"),fixture.get("tournament_name"),
                  str(fixture.get("tournament_key") or ""),stamp,stamp,fixture.get("event_type_type")))
-            inserted = self.conn.execute("INSERT OR IGNORE INTO third_set_sessions(event_key,decision,observed_at) VALUES (?,?,?)",(event_key,decision,stamp))
+            inserted = self.conn.execute("INSERT OR IGNORE INTO third_set_sessions(event_key,decision,observed_at,detail) VALUES (?,?,?,?)",(event_key,decision,stamp,detail))
             if inserted.rowcount != 1:
                 return
             for side,(odd,updated) in (watches or {}).items():

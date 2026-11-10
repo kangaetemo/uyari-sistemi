@@ -8,6 +8,7 @@ from pathlib import Path
 from app.api.live_stream import LiveScoreStream
 from app.api.tennis import TennisAPI
 from app.config import load_config, parse_decimal, validate_live_trigger
+from app.core.diagnostics import daily_report
 from app.core.results import format_report
 from app.core.monitor import Monitor
 from app.db.repository import Repository
@@ -23,13 +24,21 @@ def setup_logging(level):
 
 
 async def run(args):
-    config = load_config(test_telegram=args.test_telegram, require_api=not args.report)
+    config = load_config(test_telegram=args.test_telegram, require_api=not (args.report or args.teshis))
     setup_logging(config.log_level)
     if args.live_trigger is not None:
         from dataclasses import replace
         value = parse_decimal("--live-trigger", args.live_trigger)
         validate_live_trigger(value, config.prematch_max)
         config = replace(config,live_trigger=value)
+    if args.teshis:
+        repo = Repository(config.database_path)
+        try:
+            day = datetime.strptime(args.gun, "%Y-%m-%d").date() if args.gun else None
+            print(daily_report(repo, config, day))
+        finally:
+            repo.close()
+        return
     if args.report:
         repo = Repository(config.database_path)
         try:
@@ -119,6 +128,8 @@ def main():
     modes.add_argument("--test-websocket",action="store_true",help="WebSocket bağlantısını 30 sn dinle ve özetle")
     modes.add_argument("--collect-results",action="store_true",help="Eski takipleri kapat ve maç sonuçlarını topla")
     modes.add_argument("--report",action="store_true",help="Alarm sonuçları ve kazanma oranı raporu")
+    modes.add_argument("--teshis",action="store_true",help="Bir günün alarm teşhisi: bot durumu, adaylar, 3. set kararları")
+    parser.add_argument("--gun",help="--teshis için gün, YYYY-MM-DD (varsayılan bugün)")
     parser.add_argument("--days",type=int,default=30,help="--report için gün sayısı (varsayılan 30)")
     parser.add_argument("--live-trigger",help="Canlı alarm eşiği")
     args = parser.parse_args()

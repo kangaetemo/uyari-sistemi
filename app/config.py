@@ -27,6 +27,7 @@ class Config:
     third_set_max: Decimal = Decimal("1.60")
     third_set_trigger: Decimal = Decimal("2.00")
     third_set_odds_max_age_seconds: int = 30
+    third_set_opening_max_age_seconds: int = 300
     match_expiry_hours: int = 8
     live_stale_minutes: int = 45
     result_poll_seconds: int = 1800
@@ -80,6 +81,7 @@ def load_config(*, test_telegram: bool = False, require_api: bool = True) -> Con
         third_set_max=decimal("THIRD_SET_MAX", "1.60"),
         third_set_trigger=decimal("THIRD_SET_TRIGGER", "2.00"),
         third_set_odds_max_age_seconds=integer("THIRD_SET_ODDS_MAX_AGE_SECONDS", "30"),
+        third_set_opening_max_age_seconds=integer("THIRD_SET_OPENING_MAX_AGE_SECONDS", "300"),
         match_expiry_hours=integer("MATCH_EXPIRY_HOURS", "8"),
         live_stale_minutes=integer("LIVE_STALE_MINUTES", "45"),
         result_poll_seconds=integer("RESULT_POLL_SECONDS", "1800"),
@@ -101,6 +103,8 @@ def load_config(*, test_telegram: bool = False, require_api: bool = True) -> Con
         raise ValueError("THIRD_SET_TRIGGER > THIRD_SET_MAX olmalı")
     if config.third_set_odds_max_age_seconds < 1:
         raise ValueError("THIRD_SET_ODDS_MAX_AGE_SECONDS >= 1 olmalı")
+    if config.third_set_opening_max_age_seconds < 1:
+        raise ValueError("THIRD_SET_OPENING_MAX_AGE_SECONDS >= 1 olmalı")
     if config.serve_for_set_favorite_max <= Decimal("1"):
         raise ValueError("SERVE_FOR_SET_FAVORITE_MAX > 1 olmalı")
     if config.prematch_poll_seconds < 30 or config.live_poll_seconds < 2 or config.status_poll_seconds < 30:
